@@ -1,12 +1,19 @@
 use byteorder::{ByteOrder, LittleEndian};
 use nom::{self, IResult};
+use std::collections::HashMap;
 use std::io;
 use std::io::prelude::*;
+use std::marker::PhantomData;
+use std::mem;
+use tokio::prelude::*;
+use {PartialMissing, PartialServiceState, StatementData};
 
 const U24_MAX: usize = 16_777_215;
 
 pub struct PacketWriter<W> {
     to_write: Vec<u8>,
+    last_packet_start: usize,
+    written: usize,
     seq: u8,
     w: W,
 }
@@ -24,8 +31,9 @@ impl<W: Write> Write for PacketWriter<W> {
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.maybe_end_packet()?;
-        self.w.flush()
+        unimplemented!();
+        // self.maybe_end_packet()?;
+        // self.w.flush()
     }
 }
 
@@ -33,26 +41,109 @@ impl<W: Write> PacketWriter<W> {
     pub fn new(w: W) -> Self {
         PacketWriter {
             to_write: vec![0, 0, 0, 0],
+            last_packet_start: 0,
+            written: 0,
             seq: 0,
             w,
         }
     }
 
     fn maybe_end_packet(&mut self) -> io::Result<()> {
-        let len = self.to_write.len() - 4;
+        let len = self.to_write.len() - 4 - self.last_packet_start;
         if len != 0 {
-            LittleEndian::write_u24(&mut self.to_write[0..3], len as u32);
-            self.to_write[3] = self.seq;
+            LittleEndian::write_u24(
+                &mut self.to_write[self.last_packet_start..self.last_packet_start + 3],
+                len as u32,
+            );
+            self.to_write[self.last_packet_start + 3] = self.seq;
             self.seq = self.seq.wrapping_add(1);
-
-            self.w.write_all(&self.to_write[..])?;
-            self.to_write.truncate(4); // back to just header
+            self.last_packet_start = self.to_write.len();
+            self.to_write.extend(&[0, 0, 0, 0]); // add next packet's header
         }
         Ok(())
     }
 
     pub fn end_packet(&mut self) -> io::Result<()> {
         self.maybe_end_packet()
+    }
+}
+
+pub(crate) enum Flusher<W, M> {
+    Flushing {
+        stmts: HashMap<u32, StatementData>,
+        writer: PacketWriter<W>,
+        missing: PhantomData<M>,
+    },
+    Done,
+}
+
+impl<W, M: PartialMissing> Future for Flusher<W, M>
+where
+    W: AsyncWrite,
+{
+    type Item = PartialServiceState<W, M>;
+    type Error = io::Error;
+    fn poll(&mut self) -> Result<Async<Self::Item>, Self::Error> {
+        if let Flusher::Flushing {
+            mut writer,
+            stmts,
+            missing,
+        } = mem::replace(self, Flusher::Done)
+        {
+            match writer.poll_flush()? {
+                Async::NotReady => {
+                    mem::replace(
+                        self,
+                        Flusher::Flushing {
+                            writer,
+                            stmts,
+                            missing,
+                        },
+                    );
+                    Ok(Async::NotReady)
+                }
+                Async::Ready(_) => Ok(Async::Ready(PartialServiceState {
+                    output: writer,
+                    stmts,
+                    missing,
+                })),
+            }
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "attempted to poll Flusher after flushed",
+            ))
+        }
+    }
+}
+
+impl<W: AsyncWrite> PacketWriter<W> {
+    pub(crate) fn poll_flush(&mut self) -> Result<Async<()>, io::Error> {
+        self.end_packet()?;
+
+        loop {
+            if self.written == self.last_packet_start {
+                try_ready!(self.w.poll_flush());
+                self.to_write.truncate(4);
+                self.written = 0;
+                self.last_packet_start = 0;
+                return Ok(Async::Ready(()));
+            }
+
+            let w = try_ready!(
+                self.w
+                    .poll_write(&self.to_write[self.written..self.last_packet_start])
+            );
+            self.written += w;
+        }
+    }
+
+    pub(crate) fn flusher<M>(self, stmts: HashMap<u32, StatementData>) -> Flusher<W, M> {
+        Flusher::Flushing {
+            writer: self,
+            stmts,
+            missing: PhantomData,
+        }
     }
 }
 
@@ -80,24 +171,24 @@ impl<R> PacketReader<R> {
     }
 }
 
-impl<R: Read> PacketReader<R> {
-    pub fn next(&mut self) -> io::Result<Option<(u8, Packet)>> {
+impl<R: AsyncRead> PacketReader<R> {
+    pub(crate) fn poll<'a>(&'a mut self) -> Result<Async<Option<(u8, Packet<'a>)>>, io::Error> {
         self.start = self.bytes.len() - self.remaining;
 
         loop {
             {
-                let bytes = {
-                    // NOTE: this is all sorts of unfortunate. what we really want to do is to give
-                    // &self.bytes[self.start..] to `packet()`, and the lifetimes should all work
-                    // out. however, without NLL, borrowck doesn't realize that self.bytes is no
-                    // longer borrowed after the match, and so can be mutated.
-                    let bytes = &self.bytes[self.start..];
-                    unsafe { ::std::slice::from_raw_parts(bytes.as_ptr(), bytes.len()) }
-                };
+                // borrowck isn't smart enough to realize that bytes actually does live long
+                // enough. in particular, quoth @talchas:
+                //
+                // > because for borrows started before a branch it doesn't split it up between the
+                // > branches for determining when the borrow ends > in one branch it doesn't end
+                // > until after the function returns (because it is the lifetime 'a), so it does
+                // > in bot
+                let bytes: &'static [u8] = unsafe { mem::transmute(&self.bytes[self.start..]) };
                 match packet(bytes) {
                     Ok((rest, p)) => {
                         self.remaining = rest.len();
-                        return Ok(Some(p));
+                        return Ok(Async::Ready(Some(p)));
                     }
                     Err(nom::Err::Incomplete(_)) | Err(nom::Err::Error(_)) => {}
                     Err(nom::Err::Failure(ctx)) => {
@@ -116,14 +207,22 @@ impl<R: Read> PacketReader<R> {
             self.bytes.resize(end + 1024, 0);
             let read = {
                 let mut buf = &mut self.bytes[end..];
-                self.r.read(&mut buf)?
+                match self.r.poll_read(&mut buf)? {
+                    Async::Ready(n) => n,
+                    Async::NotReady => {
+                        // no bytes read
+                        self.bytes.truncate(end);
+                        self.remaining = end;
+                        return Ok(Async::NotReady);
+                    }
+                }
             };
             self.bytes.truncate(end + read);
             self.remaining = self.bytes.len();
 
             if read == 0 {
                 if self.bytes.is_empty() {
-                    return Ok(None);
+                    return Ok(Async::Ready(None));
                 } else {
                     return Err(io::Error::new(
                         io::ErrorKind::UnexpectedEof,
@@ -207,17 +306,18 @@ fn packet<'a>(input: &'a [u8]) -> IResult<&'a [u8], (u8, Packet<'a>)> {
                 };
                 (nseq, pkt)
             }
-        ) >> last: onepacket >> ({
-            let seq = last.0;
-            let pkt = if let Some(mut pkt) = full.1 {
-                assert_eq!(last.0, full.0 + 1);
-                pkt.extend(last.1);
-                pkt
-            } else {
-                Packet(last.1, Vec::new())
-            };
-            (seq, pkt)
-        })
+        ) >> last: onepacket
+            >> ({
+                let seq = last.0;
+                let pkt = if let Some(mut pkt) = full.1 {
+                    assert_eq!(last.0, full.0 + 1);
+                    pkt.extend(last.1);
+                    pkt
+                } else {
+                    Packet(last.1, Vec::new())
+                };
+                (seq, pkt)
+            })
     )
 }
 

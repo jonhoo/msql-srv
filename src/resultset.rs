@@ -4,9 +4,12 @@ use packet::PacketWriter;
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::io::{self, Write};
+use std::marker::PhantomData;
+use std::mem;
+use tokio::prelude::*;
 use value::ToMysqlValue;
 use writers;
-use {Column, ErrorKind, StatementData};
+use {Column, ErrorKind, MissingService, PartialMissing, PartialServiceState, StatementData};
 
 /// Convenience type for responding to a client `PREPARE` command.
 ///
@@ -14,12 +17,12 @@ use {Column, ErrorKind, StatementData};
 /// [`reply`](struct.StatementMetaWriter.html#method.reply) or
 /// [`error`](struct.StatementMetaWriter.html#method.error).
 #[must_use]
-pub struct StatementMetaWriter<'a, W: Write + 'a> {
-    pub(crate) writer: &'a mut PacketWriter<W>,
-    pub(crate) stmts: &'a mut HashMap<u32, StatementData>,
+pub struct StatementMetaWriter<W> {
+    pub(crate) writer: PacketWriter<W>,
+    pub(crate) stmts: HashMap<u32, StatementData>,
 }
 
-impl<'a, W: Write + 'a> StatementMetaWriter<'a, W> {
+impl<W: AsyncWrite> StatementMetaWriter<W> {
     /// Reply to the client with the given meta-information.
     ///
     /// `id` is a statement identifier that the client should supply when it later wants to execute
@@ -27,7 +30,12 @@ impl<'a, W: Write + 'a> StatementMetaWriter<'a, W> {
     /// parameters the client must provide when executing the prepared statement. `columns` is a
     /// second set of [`Column`](struct.Column.html) descriptors for the values that will be
     /// returned in each row then the statement is later executed.
-    pub fn reply<PI, CI>(self, id: u32, params: PI, columns: CI) -> io::Result<()>
+    pub fn reply<'a, PI, CI>(
+        mut self,
+        id: u32,
+        params: PI,
+        columns: CI,
+    ) -> impl Future<Item = PartialServiceState<W, MissingService>, Error = io::Error>
     where
         PI: IntoIterator<Item = &'a Column>,
         CI: IntoIterator<Item = &'a Column>,
@@ -42,15 +50,24 @@ impl<'a, W: Write + 'a> StatementMetaWriter<'a, W> {
                 ..Default::default()
             },
         );
-        writers::write_prepare_ok(id, params, columns, self.writer)
+
+        writers::write_prepare_ok(id, params, columns, &mut self.writer)
+            .into_future()
+            .and_then(move |_| self.writer.flusher(self.stmts))
     }
 
     /// Reply to the client's `PREPARE` with an error.
-    pub fn error<E>(self, kind: ErrorKind, msg: &E) -> io::Result<()>
+    pub fn error<E>(
+        mut self,
+        kind: ErrorKind,
+        msg: &E,
+    ) -> impl Future<Item = PartialServiceState<W, MissingService>, Error = io::Error>
     where
         E: Borrow<[u8]> + ?Sized,
     {
-        writers::write_err(kind, msg.borrow(), self.writer)
+        writers::write_err(kind, msg.borrow(), &mut self.writer)
+            .into_future()
+            .and_then(move |_| self.writer.flusher(self.stmts))
     }
 }
 
@@ -77,34 +94,52 @@ enum Finalizer {
 /// program may panic if an I/O error occurs when sending the end-of-records marker to the client.
 /// To handle such errors, call `no_more_results` explicitly.
 #[must_use]
-pub struct QueryResultWriter<'a, W: Write + 'a> {
+pub struct QueryResultWriter<W: Write, M> {
     // XXX: specialization instead?
     pub(crate) is_bin: bool,
-    pub(crate) writer: &'a mut PacketWriter<W>,
+    pub(crate) writer: Option<PacketWriter<W>>,
     last_end: Option<Finalizer>,
+    missing: PhantomData<M>,
+    pub(crate) stmts: HashMap<u32, StatementData>,
 }
 
-impl<'a, W: Write> QueryResultWriter<'a, W> {
-    pub(crate) fn new(writer: &'a mut PacketWriter<W>, is_bin: bool) -> Self {
+impl<W: Write, M: PartialMissing> QueryResultWriter<W, M> {
+    pub(crate) fn new(
+        writer: PacketWriter<W>,
+        stmts: HashMap<u32, StatementData>,
+        is_bin: bool,
+    ) -> Self {
         QueryResultWriter {
-            is_bin: is_bin,
-            writer: writer,
+            writer: Some(writer),
             last_end: None,
+            is_bin,
+            stmts,
+            missing: PhantomData,
         }
     }
+}
 
+impl<W: Write, M> QueryResultWriter<W, M> {
     fn finalize(&mut self, more_exists: bool) -> io::Result<()> {
         let mut status = StatusFlags::empty();
         if more_exists {
             status.set(StatusFlags::SERVER_MORE_RESULTS_EXISTS, true);
         }
+
         match self.last_end.take() {
             None => Ok(()),
             Some(Finalizer::Ok {
                 rows,
                 last_insert_id,
-            }) => writers::write_ok_packet(self.writer, rows, last_insert_id, status),
-            Some(Finalizer::EOF) => writers::write_eof_packet(self.writer, status),
+            }) => writers::write_ok_packet(
+                self.writer.as_mut().unwrap(),
+                rows,
+                last_insert_id,
+                status,
+            ),
+            Some(Finalizer::EOF) => {
+                writers::write_eof_packet(self.writer.as_mut().unwrap(), status)
+            }
         }
     }
 
@@ -113,7 +148,7 @@ impl<'a, W: Write> QueryResultWriter<'a, W> {
     /// Note that if no columns are emitted, any written rows are ignored.
     ///
     /// See [`RowWriter`](struct.RowWriter.html).
-    pub fn start(mut self, columns: &'a [Column]) -> io::Result<RowWriter<'a, W>> {
+    pub fn start<'a>(mut self, columns: &'a [Column]) -> io::Result<RowWriter<'a, W, M>> {
         self.finalize(true)?;
         RowWriter::new(self, columns)
     }
@@ -130,32 +165,84 @@ impl<'a, W: Write> QueryResultWriter<'a, W> {
         Ok(self)
     }
 
+    fn take(&mut self) -> PartialServiceState<W, M> {
+        PartialServiceState {
+            output: self.writer.take().unwrap(),
+            stmts: mem::replace(&mut self.stmts, HashMap::default()),
+            missing: PhantomData,
+        }
+    }
+}
+
+impl<W: AsyncWrite + 'static, M: PartialMissing> QueryResultWriter<W, M> {
+    fn flusher(
+        &mut self,
+    ) -> impl Future<Item = PartialServiceState<W, M>, Error = io::Error> + 'static {
+        let PartialServiceState {
+            output,
+            stmts,
+            missing: PhantomData,
+        } = self.take();
+        output.flusher(stmts)
+    }
+
     /// Send an empty resultset response to the client indicating that `rows` rows were affected by
     /// the query. `last_insert_id` may be given to communiate an identifier for a client's most
     /// recent insertion.
-    pub fn completed(self, rows: u64, last_insert_id: u64) -> io::Result<()> {
-        self.complete_one(rows, last_insert_id)?.no_more_results()
+    pub fn completed(
+        self,
+        rows: u64,
+        last_insert_id: u64,
+    ) -> impl Future<Item = PartialServiceState<W, M>, Error = io::Error> + 'static {
+        self.complete_one(rows, last_insert_id)
+            .into_future()
+            .and_then(move |this| this.no_more_results())
     }
 
     /// Reply to the client's query with an error.
-    pub fn error<E>(mut self, kind: ErrorKind, msg: &E) -> io::Result<()>
+    pub fn error<E>(
+        mut self,
+        kind: ErrorKind,
+        msg: &E,
+    ) -> impl Future<Item = PartialServiceState<W, M>, Error = io::Error> + 'static
     where
         E: Borrow<[u8]> + ?Sized,
     {
-        self.finalize(true)?;
-        writers::write_err(kind, msg.borrow(), self.writer)
+        let mut r = self.finalize(true);
+        if r.is_ok() {
+            r = writers::write_err(kind, msg.borrow(), self.writer.as_mut().unwrap());
+        }
+        r.into_future().and_then(move |_| self.flusher())
     }
 
     /// Send the last bits of the last resultset to the client, and indicate that there are no more
     /// resultsets coming.
-    pub fn no_more_results(mut self) -> io::Result<()> {
+    pub fn no_more_results(
+        mut self,
+    ) -> impl Future<Item = PartialServiceState<W, M>, Error = io::Error> + 'static {
         self.finalize(false)
+            .into_future()
+            .and_then(move |_| self.flusher())
+    }
+
+    /// Send all responses written thus far to the client.
+    pub fn flush(mut self) -> impl Future<Item = Self, Error = io::Error> + 'static {
+        self.finalize(true).into_future().and_then(move |_| {
+            let PartialServiceState { output, stmts, .. } = self.take();
+            output.flusher::<M>(stmts).map(move |pr| {
+                self.writer = Some(pr.output);
+                self.stmts = pr.stmts;
+                self
+            })
+        })
     }
 }
 
-impl<'a, W: Write> Drop for QueryResultWriter<'a, W> {
+impl<W: Write, M> Drop for QueryResultWriter<W, M> {
     fn drop(&mut self) {
-        self.finalize(false).unwrap();
+        if self.writer.is_some() {
+            self.finalize(false).unwrap();
+        }
     }
 }
 
@@ -172,8 +259,8 @@ impl<'a, W: Write> Drop for QueryResultWriter<'a, W> {
 /// if an I/O error occurs when sending the end-of-records marker to the client. To avoid this,
 /// call [`finish`](struct.RowWriter.html#method.finish) explicitly.
 #[must_use]
-pub struct RowWriter<'a, W: Write + 'a> {
-    result: Option<QueryResultWriter<'a, W>>,
+pub struct RowWriter<'a, W: Write + 'a, M> {
+    result: Option<QueryResultWriter<W, M>>,
     bitmap_len: usize,
     data: Vec<u8>,
     columns: &'a [Column],
@@ -185,14 +272,11 @@ pub struct RowWriter<'a, W: Write + 'a> {
     finished: bool,
 }
 
-impl<'a, W> RowWriter<'a, W>
-where
-    W: Write + 'a,
-{
+impl<'a, W: Write + 'a, M> RowWriter<'a, W, M> {
     fn new(
-        result: QueryResultWriter<'a, W>,
+        result: QueryResultWriter<W, M>,
         columns: &'a [Column],
-    ) -> io::Result<RowWriter<'a, W>> {
+    ) -> io::Result<RowWriter<'a, W, M>> {
         let bitmap_len = (columns.len() + 7 + 2) / 8;
         let mut rw = RowWriter {
             result: Some(result),
@@ -211,7 +295,10 @@ where
     #[inline]
     fn start(&mut self) -> io::Result<()> {
         if !self.columns.is_empty() {
-            writers::column_definitions(self.columns, self.result.as_mut().unwrap().writer)?;
+            writers::column_definitions(
+                self.columns,
+                self.result.as_mut().unwrap().writer.as_mut().unwrap(),
+            )?;
         }
         Ok(())
     }
@@ -237,7 +324,13 @@ where
 
         if self.result.as_mut().unwrap().is_bin {
             if self.col == 0 {
-                self.result.as_mut().unwrap().writer.write_u8(0x00)?;
+                self.result
+                    .as_mut()
+                    .unwrap()
+                    .writer
+                    .as_mut()
+                    .unwrap()
+                    .write_u8(0x00)?;
 
                 // leave space for nullmap
                 self.data.resize(self.bitmap_len, 0);
@@ -269,7 +362,7 @@ where
                 v.to_mysql_bin(&mut self.data, c)?;
             }
         } else {
-            v.to_mysql_text(self.result.as_mut().unwrap().writer)?;
+            v.to_mysql_text(self.result.as_mut().unwrap().writer.as_mut().unwrap())?;
         }
         self.col += 1;
         Ok(())
@@ -294,10 +387,18 @@ where
                 .as_mut()
                 .unwrap()
                 .writer
+                .as_mut()
+                .unwrap()
                 .write_all(&self.data[..])?;
             self.data.clear();
         }
-        self.result.as_mut().unwrap().writer.end_packet()?;
+        self.result
+            .as_mut()
+            .unwrap()
+            .writer
+            .as_mut()
+            .unwrap()
+            .end_packet()?;
         self.col = 0;
 
         Ok(())
@@ -323,7 +424,7 @@ where
     }
 }
 
-impl<'a, W: Write + 'a> RowWriter<'a, W> {
+impl<'a, W: Write, M> RowWriter<'a, W, M> {
     fn finish_inner(&mut self) -> io::Result<()> {
         if self.finished {
             return Ok(());
@@ -347,22 +448,31 @@ impl<'a, W: Write + 'a> RowWriter<'a, W> {
         }
         Ok(())
     }
+}
 
+impl<'a, W: AsyncWrite + 'static, M: PartialMissing> RowWriter<'a, W, M> {
     /// Indicate to the client that no more rows are coming.
-    pub fn finish(self) -> io::Result<()> {
-        self.finish_one()?.no_more_results()
+    pub fn finish(
+        self,
+    ) -> impl Future<Item = PartialServiceState<W, M>, Error = io::Error> + 'static {
+        self.finish_one().and_then(|w| w.no_more_results())
     }
 
     /// End this resultset response, and indicate to the client that no more rows are coming.
-    pub fn finish_one(mut self) -> io::Result<QueryResultWriter<'a, W>> {
-        self.finish_inner()?;
-        // we know that dropping self will see self.finished == true,
-        // and so Drop won't try to use self.result.
-        Ok(self.result.take().unwrap())
+    pub fn finish_one(
+        mut self,
+    ) -> impl Future<Item = QueryResultWriter<W, M>, Error = io::Error> + 'static {
+        let r = self.finish_inner();
+        let pw = self.result.take().unwrap();
+        r.into_future().and_then(move |_| {
+            // we know that dropping self will see self.finished == true,
+            // and so Drop won't try to use self.result.
+            pw.flush()
+        })
     }
 }
 
-impl<'a, W: Write + 'a> Drop for RowWriter<'a, W> {
+impl<'a, W: Write + 'a, M> Drop for RowWriter<'a, W, M> {
     fn drop(&mut self) {
         self.finish_inner().unwrap();
     }

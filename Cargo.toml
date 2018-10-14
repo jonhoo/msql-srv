@@ -27,6 +27,8 @@ nom = "4.0.0-beta3"
 mysql_common = "0.5"
 byteorder = "1"
 chrono = "0.4"
+tokio = "0.1"
+futures = "0.1"
 
 [dev-dependencies]
 postgres = "0.15"
