@@ -1,10 +1,10 @@
+use crate::{packet, params, QueryResultWriter, StatementData, StatementMetaWriter};
 use std::collections::HashMap;
 use std::fmt;
 use std::io;
 use std::io::prelude::*;
 use std::marker::PhantomData;
 use tokio::prelude::*;
-use {packet, params, QueryResultWriter, StatementData, StatementMetaWriter};
 
 /// Indicates what state is missing from a [`PartialServiceState`] to produce a [`ServiceState`].
 ///
@@ -91,7 +91,7 @@ where
     type Error: From<io::Error>;
 
     /// Type of the future used to handle client request.
-    type ResponseFut: Future<Item = ServiceState<W, Self>, Error = Self::Error> + 'static;
+    type ResponseFut: IntoFuture<Item = ServiceState<W, Self>, Error = Self::Error> + 'static;
 
     /// Handle a single client request.
     ///
@@ -103,8 +103,29 @@ where
     fn on_request(self, req: Request<W>) -> Self::ResponseFut;
 }
 
+/// A client request that you have to promise not to use incorrectly.
+///
+/// You will need to call [`RawRequest::i_read_the_docs`].
+pub struct RawRequest<W: Write>(Request<W>);
+
+impl<W: Write> RawRequest<W> {
+    /// You have to call this method, but read its full description first.
+    ///
+    /// Items marked `'static` in [`Request`] are *not* actually `'static`. They live until the
+    /// produced [`Service::ResponseFut`] resolves. Unfortunately, there isn't any way currently in
+    /// Rust to express that sort of dynamic lifetime as far as I can tell. Instead, we have to
+    /// cheat and pretend they're `'static` so that they can be brought into the returned future.
+    ///
+    /// It is *very* important that you do not try to use the data from a [`Request`] outside of
+    /// the scope of the returned future (e.g., spawn them onto another thread), as this *will*
+    /// lead to faulty program behavior.
+    pub unsafe fn i_read_the_docs(self) -> Request<W> {
+        self.0
+    }
+}
+
 /// A client request.
-pub enum Request<'a, W: Write> {
+pub enum Request<W: Write> {
     /// The client issued a request to prepare `query` for later execution.
     ///
     /// The provided [`StatementMetaWriter`](struct.StatementMetaWriter.html) should be used to
@@ -112,7 +133,7 @@ pub enum Request<'a, W: Write> {
     /// give metadata about the types of parameters and returned columns.
     Prepare {
         /// The SQL query issued by the client.
-        query: &'a str,
+        query: &'static str,
 
         /// A handle for replying with information about the newly prepared statemetn to the
         /// client.
@@ -129,7 +150,7 @@ pub enum Request<'a, W: Write> {
         id: u32,
 
         /// An iterator over parameters provided by the client for executing this statement.
-        params: params::Params<'a>,
+        params: params::Params<'static>,
 
         /// A handle for writing query results back to the client.
         results: QueryResultWriter<W, MissingParams>,
@@ -151,9 +172,15 @@ pub enum Request<'a, W: Write> {
     /// [`QueryResultWriter`](struct.QueryResultWriter.html).
     Query {
         /// The SQL query issued by the client.
-        query: &'a str,
+        query: &'static str,
 
         /// A handle for writing query results back to the client.
         results: QueryResultWriter<W, MissingService>,
     },
+}
+
+impl<W: Write> From<Request<W>> for RawRequest<W> {
+    fn from(r: Request<W>) -> Self {
+        RawRequest(r)
+    }
 }

@@ -1,9 +1,9 @@
 use byteorder::{LittleEndian, WriteBytesExt};
-use myc::constants::StatusFlags;
-use myc::io::WriteMysqlExt;
-use packet::PacketWriter;
+use crate::packet::PacketWriter;
+use crate::{Column, ErrorKind};
+use mysql_common::constants::StatusFlags;
+use mysql_common::io::WriteMysqlExt;
 use std::io::{self, Write};
-use {Column, ErrorKind};
 
 pub(crate) fn write_eof_packet<W: Write>(
     w: &mut PacketWriter<W>,
@@ -80,7 +80,7 @@ where
     let mut empty = true;
     for c in i {
         let c = c.borrow();
-        use myc::constants::UTF8_GENERAL_CI;
+        use mysql_common::constants::UTF8_GENERAL_CI;
         w.write_lenenc_str(b"def")?;
         w.write_lenenc_str(b"")?;
         w.write_lenenc_str(c.table.as_bytes())?;

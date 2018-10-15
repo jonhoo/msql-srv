@@ -1,22 +1,22 @@
-use myc;
-use myc::constants::StatusFlags;
+use crate::{
+    commands, packet, params, writers, Column, PartialServiceState, QueryResultWriter, Request,
+    Service, ServiceState, StatementData, StatementMetaWriter,
+};
+use mysql_common as myc;
+use mysql_common::constants::StatusFlags;
 use std::collections::HashMap;
 use std::io;
 use std::iter;
 use std::marker::PhantomData;
 use std::mem;
 use tokio::prelude::*;
-use {
-    commands, packet, params, writers, Column, PartialServiceState, QueryResultWriter, Request,
-    Service, ServiceState, StatementData, StatementMetaWriter,
-};
 
 enum ResponseState<W, S>
 where
     W: AsyncWrite,
     S: Service<W>,
 {
-    UserFuture(S::ResponseFut),
+    UserFuture(<S::ResponseFut as IntoFuture>::Future),
     Flush(ServiceState<W, S>),
     Pending,
 }
@@ -287,7 +287,7 @@ where
                     service,
                     mut stmts,
                 } => {
-                    use commands::Command;
+                    use crate::commands::Command;
 
                     match input.poll()? {
                         Async::NotReady => {
@@ -375,12 +375,22 @@ where
                                             );
                                         }
                                     } else {
-                                        let fut = service.on_request(Request::Query {
-                                            query: ::std::str::from_utf8(q).map_err(|e| {
-                                                io::Error::new(io::ErrorKind::InvalidData, e)
-                                            })?,
-                                            results: w,
-                                        });
+                                        let fut = service
+                                            .on_request(
+                                                Request::Query {
+                                                    query: ::std::str::from_utf8(q).map_err(
+                                                        |e| {
+                                                            io::Error::new(
+                                                                io::ErrorKind::InvalidData,
+                                                                e,
+                                                            )
+                                                        },
+                                                    )?,
+                                                    results: w,
+                                                }
+                                                .into(),
+                                            )
+                                            .into_future();
 
                                         mem::replace(
                                             &mut self.state,
@@ -393,15 +403,18 @@ where
                                     }
                                 }
                                 Command::Prepare(q) => {
-                                    let fut = service.on_request(Request::Prepare {
-                                        query: ::std::str::from_utf8(q).map_err(|e| {
-                                            io::Error::new(io::ErrorKind::InvalidData, e)
-                                        })?,
-                                        info: StatementMetaWriter {
-                                            writer: output,
-                                            stmts: stmts,
-                                        },
-                                    });
+                                    let fut = service
+                                        .on_request(Request::Prepare {
+                                            query: ::std::str::from_utf8(q).map_err(|e| {
+                                                { io::Error::new(io::ErrorKind::InvalidData, e) }
+                                                    .into()
+                                            })?,
+                                            info: StatementMetaWriter {
+                                                writer: output,
+                                                stmts: stmts,
+                                            },
+                                        })
+                                        .into_future();
 
                                     mem::replace(
                                         &mut self.state,
@@ -423,11 +436,16 @@ where
                                     {
                                         let params = params::Params::new(params, (stmt, state));
                                         let w = QueryResultWriter::new(output, stmts, true);
-                                        let fut = service.on_request(Request::Execute {
-                                            id: stmt,
-                                            params,
-                                            results: w,
-                                        });
+                                        let fut = service
+                                            .on_request(
+                                                Request::Execute {
+                                                    id: stmt,
+                                                    params,
+                                                    results: w,
+                                                }
+                                                .into(),
+                                            )
+                                            .into_future();
 
                                         mem::replace(
                                             &mut self.state,
@@ -458,14 +476,19 @@ where
                                 }
                                 Command::Close(stmt) => {
                                     stmts.remove(&stmt);
-                                    let fut = service.on_request(Request::Close {
-                                        id: stmt,
-                                        rest: PartialServiceState {
-                                            output,
-                                            stmts,
-                                            missing: PhantomData,
-                                        },
-                                    });
+                                    let fut = service
+                                        .on_request(
+                                            Request::Close {
+                                                id: stmt,
+                                                rest: PartialServiceState {
+                                                    output,
+                                                    stmts,
+                                                    missing: PhantomData,
+                                                },
+                                            }
+                                            .into(),
+                                        )
+                                        .into_future();
 
                                     mem::replace(
                                         &mut self.state,

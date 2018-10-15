@@ -90,25 +90,16 @@
 //
 // Wireshark also does a pretty good job at parsing the MySQL protocol.
 
-extern crate byteorder;
-extern crate chrono;
-extern crate mysql_common as myc;
 #[macro_use]
 extern crate nom;
-extern crate tokio;
 #[macro_use]
 extern crate futures;
 
+use mysql_common as myc;
 use std::collections::HashMap;
 use std::io;
 use std::net;
 use tokio::prelude::*;
-
-pub use errorcodes::ErrorKind;
-pub use myc::constants::{ColumnFlags, ColumnType, StatusFlags};
-pub use params::{ParamValue, Params};
-pub use resultset::{QueryResultWriter, RowWriter, StatementMetaWriter};
-pub use value::{ToMysqlValue, Value, ValueInner};
 
 mod commands;
 mod errorcodes;
@@ -117,6 +108,12 @@ mod params;
 mod resultset;
 mod value;
 mod writers;
+
+pub use crate::errorcodes::ErrorKind;
+pub use crate::myc::constants::{ColumnFlags, ColumnType, StatusFlags};
+pub use crate::params::{ParamValue, Params};
+pub use crate::resultset::{QueryResultWriter, RowWriter, StatementMetaWriter};
+pub use crate::value::{ToMysqlValue, Value, ValueInner};
 
 /// Bind a new server to a TCP port and process client requests until the client disconnects or an
 /// error occurs. See also
@@ -152,6 +149,19 @@ where
     W: AsyncWrite,
 {
     ConnectionStream(connections)
+}
+
+/// Use the given [`Service`] to serve the client on the given connection.
+pub fn single<Svc, S>(
+    svc: Svc,
+    stream: S,
+) -> Connection<tokio::io::ReadHalf<S>, tokio::io::WriteHalf<S>, Svc>
+where
+    Svc: Service<tokio::io::WriteHalf<S>>,
+    S: AsyncRead + AsyncWrite,
+{
+    let (r, w) = stream.split();
+    Connection::new(svc, r, w)
 }
 
 /// A stream of incoming MySQL client connections.
@@ -210,10 +220,10 @@ pub struct Column {
 }
 
 mod connection;
-pub use connection::Connection;
+pub use crate::connection::Connection;
 
 mod service;
-pub use service::{
-    MissingParams, MissingService, PartialMissing, PartialServiceState, Request, Service,
-    ServiceState,
+pub use crate::service::{
+    MissingParams, MissingService, PartialMissing, PartialServiceState, RawRequest, Request,
+    Service, ServiceState,
 };

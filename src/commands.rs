@@ -1,4 +1,4 @@
-use myc::constants::{CapabilityFlags, Command as CommandByte};
+use mysql_common::constants::{CapabilityFlags, Command as CommandByte};
 use nom;
 
 #[derive(Debug)]

@@ -1,15 +1,17 @@
 use byteorder::WriteBytesExt;
-use myc::constants::{ColumnFlags, StatusFlags};
-use packet::PacketWriter;
+use crate::packet::PacketWriter;
+use crate::value::ToMysqlValue;
+use crate::writers;
+use crate::{
+    Column, ErrorKind, MissingService, PartialMissing, PartialServiceState, StatementData,
+};
+use mysql_common::constants::{ColumnFlags, StatusFlags};
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::io::{self, Write};
 use std::marker::PhantomData;
 use std::mem;
 use tokio::prelude::*;
-use value::ToMysqlValue;
-use writers;
-use {Column, ErrorKind, MissingService, PartialMissing, PartialServiceState, StatementData};
 
 /// Convenience type for responding to a client `PREPARE` command.
 ///
@@ -35,12 +37,13 @@ impl<W: AsyncWrite> StatementMetaWriter<W> {
         id: u32,
         params: PI,
         columns: CI,
-    ) -> impl Future<Item = PartialServiceState<W, MissingService>, Error = io::Error>
+    ) -> impl Future<Item = PartialServiceState<W, MissingService>, Error = io::Error> + 'static
     where
         PI: IntoIterator<Item = &'a Column>,
         CI: IntoIterator<Item = &'a Column>,
         <PI as IntoIterator>::IntoIter: ExactSizeIterator,
         <CI as IntoIterator>::IntoIter: ExactSizeIterator,
+        W: 'static,
     {
         let params = params.into_iter();
         self.stmts.insert(

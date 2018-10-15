@@ -1,6 +1,6 @@
 use byteorder::{LittleEndian, ReadBytesExt};
-use myc::constants::ColumnType;
-use myc::io::ReadMysqlExt;
+use mysql_common::constants::ColumnType;
+use mysql_common::io::ReadMysqlExt;
 use std::io;
 
 /// MySQL value as provided when executing prepared statements.

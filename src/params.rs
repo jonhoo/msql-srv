@@ -1,5 +1,5 @@
-use myc;
-use {StatementData, Value};
+use crate::{StatementData, Value};
+use mysql_common as myc;
 
 /// A `ParamParser` decodes query parameters included in a client's `EXECUTE` command given
 /// type information for the expected parameters.

@@ -1,4 +1,5 @@
 use byteorder::{ByteOrder, LittleEndian};
+use crate::{PartialMissing, PartialServiceState, StatementData};
 use nom::{self, IResult};
 use std::collections::HashMap;
 use std::io;
@@ -6,7 +7,6 @@ use std::io::prelude::*;
 use std::marker::PhantomData;
 use std::mem;
 use tokio::prelude::*;
-use {PartialMissing, PartialServiceState, StatementData};
 
 const U24_MAX: usize = 16_777_215;
 
