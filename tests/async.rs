@@ -67,7 +67,7 @@ where
                 mut params,
                 results,
             } => {
-                let ps = Vec::new();
+                let mut ps = Vec::new();
                 while let Some(p) = params.next() {
                     ps.push(p);
                 }
@@ -392,13 +392,11 @@ fn it_queries() {
                 coltype: myc::constants::ColumnType::MYSQL_TYPE_SHORT,
                 colflags: myc::constants::ColumnFlags::empty(),
             }];
-            w.start(cols)
-                .and_then(|w| {
-                    w.write_col(1024i16)?;
-                    Ok(w)
-                })
-                .into_future()
-                .and_then(|w| w.finish())
+
+            do_and_finish!(w.start(cols) => |w| {
+                w.write_col(1024i16)?;
+                w
+            })
         },
         |_| unreachable!(),
         |_, _, _| {
