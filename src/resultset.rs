@@ -24,6 +24,9 @@ pub struct StatementMetaWriter<W> {
     pub(crate) stmts: HashMap<u32, StatementData>,
 }
 
+existential type ReplyFut<W>:
+    Future<Item = PartialServiceState<W, MissingService>, Error = io::Error>;
+
 impl<W: AsyncWrite> StatementMetaWriter<W> {
     /// Reply to the client with the given meta-information.
     ///
@@ -32,18 +35,12 @@ impl<W: AsyncWrite> StatementMetaWriter<W> {
     /// parameters the client must provide when executing the prepared statement. `columns` is a
     /// second set of [`Column`](struct.Column.html) descriptors for the values that will be
     /// returned in each row then the statement is later executed.
-    pub fn reply<'a, PI, CI>(
-        mut self,
-        id: u32,
-        params: PI,
-        columns: CI,
-    ) -> impl Future<Item = PartialServiceState<W, MissingService>, Error = io::Error> + 'static
+    pub fn reply<'a, PI, CI>(mut self, id: u32, params: PI, columns: CI) -> ReplyFut<W>
     where
         PI: IntoIterator<Item = &'a Column>,
         CI: IntoIterator<Item = &'a Column>,
         <PI as IntoIterator>::IntoIter: ExactSizeIterator,
         <CI as IntoIterator>::IntoIter: ExactSizeIterator,
-        W: 'static,
     {
         let params = params.into_iter();
         self.stmts.insert(
@@ -54,9 +51,10 @@ impl<W: AsyncWrite> StatementMetaWriter<W> {
             },
         );
 
-        writers::write_prepare_ok(id, params, columns, &mut self.writer)
-            .into_future()
-            .and_then(move |_| self.writer.flusher(self.stmts))
+        match writers::write_prepare_ok(id, params, columns, &mut self.writer) {
+            Ok(_) => future::Either::A(self.writer.flusher(self.stmts)),
+            Err(e) => future::Either::B(future::err(e)),
+        }
     }
 
     /// Reply to the client's `PREPARE` with an error.
@@ -453,25 +451,25 @@ impl<'a, W: Write, M> RowWriter<'a, W, M> {
     }
 }
 
+existential type FinishFut<W, M>: Future<Item = PartialServiceState<W, M>, Error = io::Error>;
+existential type FinishOneFut<W, M>: Future<Item = QueryResultWriter<W, M>, Error = io::Error>;
+
 impl<'a, W: AsyncWrite + 'static, M: PartialMissing> RowWriter<'a, W, M> {
     /// Indicate to the client that no more rows are coming.
-    pub fn finish(
-        self,
-    ) -> impl Future<Item = PartialServiceState<W, M>, Error = io::Error> + 'static {
+    pub fn finish(self) -> FinishFut<W, M> {
         self.finish_one().and_then(|w| w.no_more_results())
     }
 
     /// End this resultset response, and indicate to the client that no more rows are coming.
-    pub fn finish_one(
-        mut self,
-    ) -> impl Future<Item = QueryResultWriter<W, M>, Error = io::Error> + 'static {
-        let r = self.finish_inner();
-        let pw = self.result.take().unwrap();
-        r.into_future().and_then(move |_| {
-            // we know that dropping self will see self.finished == true,
-            // and so Drop won't try to use self.result.
-            pw.flush()
-        })
+    pub fn finish_one(mut self) -> FinishOneFut<W, M> {
+        match self.finish_inner() {
+            Ok(_) => {
+                // we know that dropping self will see self.finished == true,
+                // and so Drop won't try to use self.result.
+                future::Either::A(self.result.take().unwrap().flush())
+            }
+            Err(e) => future::Either::B(future::err(e)),
+        }
     }
 }
 

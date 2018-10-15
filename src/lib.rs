@@ -79,6 +79,7 @@
 //! ```
 #![deny(missing_docs)]
 #![feature(nll)]
+#![feature(existential_type)]
 
 // Note to developers: you can find decent overviews of the protocol at
 //
