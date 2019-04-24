@@ -29,7 +29,7 @@ byteorder = "1"
 chrono = "0.4"
 
 [dev-dependencies]
-postgres = "0.15"
+postgres = "0.15.2"
 mysql = "15.1.0"
 mysql_async = "0.14"
 slab = "0.4"
