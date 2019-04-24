@@ -30,8 +30,8 @@ chrono = "0.4"
 
 [dev-dependencies]
 postgres = "0.15.2"
-mysql = "15.1.0"
-mysql_async = "0.14"
+mysql = "16.0.0"
+mysql_async = "0.19.0"
 slab = "0.4.2"
 tokio-core = "0.1.17"
 futures = "0.1.26"

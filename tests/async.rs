@@ -93,7 +93,7 @@ where
 
     fn test<C, F>(self, c: C)
     where
-        F: IntoFuture<Item = (), Error = mysql_async::errors::Error>,
+        F: IntoFuture<Item = (), Error = mysql_async::error::Error>,
         C: FnOnce(mysql_async::Conn) -> F,
     {
         let listener = net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -104,11 +104,9 @@ where
         });
 
         let mut core = Core::new().unwrap();
-        let handle = core.handle();
         let db =
             core.run(mysql_async::Conn::new(
-                &format!("mysql://127.0.0.1:{}", port),
-                &handle,
+                format!("mysql://127.0.0.1:{}", port),
             )).unwrap();
         core.run(c(db).into_future()).unwrap();
         jh.join().unwrap().unwrap();
@@ -123,6 +121,7 @@ fn it_connects() {
         |_, _, _| unreachable!(),
     ).test(|_| Ok(()))
 }
+
 
 #[test]
 fn it_pings() {
@@ -214,9 +213,12 @@ fn error_response() {
         db.query("SELECT a, b FROM foo").then(|r| {
             match r {
                 Ok(_) => assert!(false),
-                Err(mysql_async::errors::Error(
-                    mysql_async::errors::ErrorKind::Server(ref state, code, ref msg),
-                    _,
+                Err(mysql_async::error::Error::Server(
+                    mysql_async::error::ServerError{
+                        code,
+                        message: ref msg,
+                        ref state
+                    }
                 )) => {
                     assert_eq!(
                         state,
