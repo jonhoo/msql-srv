@@ -120,7 +120,7 @@ where
 
         runtime.shutdown_on_idle().wait().unwrap();
 
-        drop(pool);
+        pool.disconnect();
 
         jh.join().unwrap().unwrap();
     }
