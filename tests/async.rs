@@ -97,11 +97,7 @@ where
         <F as futures::IntoFuture>::Future: std::marker::Send,
         C: FnOnce(mysql_async::Conn) -> F + Send + 'static,
     {
-        let mut runtime = tokio::runtime::Runtime::new().unwrap();
-
-        let listener = net::TcpListener::bind("127.0.0.1:0").unwrap();
-
-        let mut runtime = tokio::runtime::Runtime::new().unwrap();
+        let mut runtime = Runtime::new().unwrap();
 
         let listener = net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -120,12 +116,13 @@ where
             c(conn)
         });
 
-        let res = runtime.block_on(future).unwrap();
+        let _res = runtime.block_on(future).unwrap();
 
         runtime.shutdown_on_idle().wait().unwrap();
 
-        // TODO: join here cleanly without it hanging...
-        // jh.join().unwrap().unwrap();
+        drop(pool);
+
+        jh.join().unwrap().unwrap();
     }
 }
 
