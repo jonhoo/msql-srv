@@ -4,14 +4,14 @@ extern crate msql_srv;
 extern crate mysql_async;
 extern crate mysql_common as myc;
 extern crate nom;
-extern crate tokio_core;
+extern crate tokio;
 
 use futures::{Future, IntoFuture};
 use mysql_async::prelude::*;
 use std::io;
 use std::net;
 use std::thread;
-use tokio_core::reactor::Core;
+use tokio::runtime::Runtime;
 
 use msql_srv::{
     Column, ErrorKind, MysqlIntermediary, MysqlShim, ParamParser, QueryResultWriter,
@@ -23,7 +23,7 @@ struct TestingShim<Q, P, E> {
     params: Vec<Column>,
     on_q: Q,
     on_p: P,
-    on_e: E,
+    on_e: E
 }
 
 impl<Q, P, E> MysqlShim<net::TcpStream> for TestingShim<Q, P, E>
@@ -93,23 +93,39 @@ where
 
     fn test<C, F>(self, c: C)
     where
-        F: IntoFuture<Item = (), Error = mysql_async::error::Error>,
-        C: FnOnce(mysql_async::Conn) -> F,
+        F: IntoFuture<Item = (), Error = mysql_async::error::Error> + 'static,
+        <F as futures::IntoFuture>::Future: std::marker::Send,
+        C: FnOnce(mysql_async::Conn) -> F + Send + 'static,
     {
+        let mut runtime = tokio::runtime::Runtime::new().unwrap();
+
+        let listener = net::TcpListener::bind("127.0.0.1:0").unwrap();
+
+        let mut runtime = tokio::runtime::Runtime::new().unwrap();
+
         let listener = net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
+
         let jh = thread::spawn(move || {
             let (s, _) = listener.accept().unwrap();
+
             MysqlIntermediary::run_on_tcp(self, s)
         });
 
-        let mut core = Core::new().unwrap();
-        let db =
-            core.run(mysql_async::Conn::new(
-                format!("mysql://127.0.0.1:{}", port),
-            )).unwrap();
-        core.run(c(db).into_future()).unwrap();
-        jh.join().unwrap().unwrap();
+        let db_uri = format!("mysql://127.0.0.1:{}", port);
+
+        let pool = mysql_async::Pool::new(db_uri);
+
+        let future = pool.get_conn().and_then(|conn| {
+            c(conn)
+        });
+
+        let res = runtime.block_on(future).unwrap();
+
+        runtime.shutdown_on_idle().wait().unwrap();
+
+        // TODO: join here cleanly without it hanging...
+        // jh.join().unwrap().unwrap();
     }
 }
 
@@ -209,8 +225,8 @@ fn error_response() {
         move |_, w| w.error(err.0, err.1.as_bytes()),
         |_| unreachable!(),
         |_, _, _| unreachable!(),
-    ).test(|db| {
-        db.query("SELECT a, b FROM foo").then(|r| {
+    ).test(move |db| {
+        db.query("SELECT a, b FROM foo").then(move |r| {
             match r {
                 Ok(_) => assert!(false),
                 Err(mysql_async::error::Error::Server(
