@@ -11,7 +11,7 @@ use mysql_async::prelude::*;
 use std::io;
 use std::net;
 use std::thread;
-use tokio::runtime::Runtime;
+use tokio::runtime::current_thread;
 
 use msql_srv::{
     Column, ErrorKind, MysqlIntermediary, MysqlShim, ParamParser, QueryResultWriter,
@@ -93,11 +93,10 @@ where
 
     fn test<C, F>(self, c: C)
     where
-        F: IntoFuture<Item = (), Error = mysql_async::error::Error> + 'static,
-        <F as futures::IntoFuture>::Future: std::marker::Send,
-        C: FnOnce(mysql_async::Conn) -> F + Send + 'static,
+        F: IntoFuture<Item = (), Error = mysql_async::error::Error>,
+        C: FnOnce(mysql_async::Conn) -> F,
     {
-        let mut runtime = Runtime::new().unwrap();
+        let mut runtime = current_thread::Runtime::new().unwrap();
 
         let listener = net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -108,17 +107,11 @@ where
             MysqlIntermediary::run_on_tcp(self, s)
         });
 
-        let db_uri = format!("mysql://127.0.0.1:{}", port);
+        let pool = mysql_async::Pool::new(format!("mysql://127.0.0.1:{}", port));
 
-        let pool = mysql_async::Pool::new(db_uri);
+        let future = pool.get_conn().and_then(|conn| c(conn));
 
-        let future = pool.get_conn().and_then(|conn| {
-            c(conn)
-        });
-
-        let _res = runtime.block_on(future).unwrap();
-
-        runtime.shutdown_on_idle().wait().unwrap();
+        runtime.block_on(future).unwrap();
 
         pool.disconnect();
 
@@ -222,15 +215,15 @@ fn error_response() {
         move |_, w| w.error(err.0, err.1.as_bytes()),
         |_| unreachable!(),
         |_, _, _| unreachable!(),
-    ).test(move |db| {
+    ).test(|db| {
         db.query("SELECT a, b FROM foo").then(move |r| {
             match r {
                 Ok(_) => assert!(false),
                 Err(mysql_async::error::Error::Server(
-                    mysql_async::error::ServerError{
+                    mysql_async::error::ServerError {
                         code,
                         message: ref msg,
-                        ref state
+                        ref state,
                     }
                 )) => {
                     assert_eq!(
