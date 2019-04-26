@@ -103,7 +103,6 @@ where
 
         let jh = thread::spawn(move || {
             let (s, _) = listener.accept().unwrap();
-
             MysqlIntermediary::run_on_tcp(self, s)
         });
 
@@ -127,7 +126,6 @@ fn it_connects() {
         |_, _, _| unreachable!(),
     ).test(|_| Ok(()))
 }
-
 
 #[test]
 fn it_pings() {
