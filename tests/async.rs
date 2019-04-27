@@ -96,8 +96,6 @@ where
         F: IntoFuture<Item = (), Error = mysql_async::error::Error>,
         C: FnOnce(mysql_async::Conn) -> F,
     {
-        let mut runtime = current_thread::Runtime::new().unwrap();
-
         let listener = net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
 
@@ -106,13 +104,9 @@ where
             MysqlIntermediary::run_on_tcp(self, s)
         });
 
-        let pool = mysql_async::Pool::new(format!("mysql://127.0.0.1:{}", port));
+        let mut runtime = current_thread::Runtime::new().unwrap();
 
-        let future = pool.get_conn().and_then(|conn| c(conn));
-
-        runtime.block_on(future).unwrap();
-
-        pool.disconnect();
+        runtime.block_on(mysql_async::Pool::new(format!("mysql://127.0.0.1:{}", port)).get_conn().and_then(|conn| c(conn))).unwrap();
 
         jh.join().unwrap().unwrap();
     }
@@ -214,7 +208,7 @@ fn error_response() {
         |_| unreachable!(),
         |_, _, _| unreachable!(),
     ).test(|db| {
-        db.query("SELECT a, b FROM foo").then(move |r| {
+        db.query("SELECT a, b FROM foo").then(|r| {
             match r {
                 Ok(_) => assert!(false),
                 Err(mysql_async::error::Error::Server(
