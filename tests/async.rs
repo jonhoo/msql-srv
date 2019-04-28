@@ -11,7 +11,6 @@ use mysql_async::prelude::*;
 use std::io;
 use std::net;
 use std::thread;
-use tokio::runtime::current_thread;
 
 use msql_srv::{
     Column, ErrorKind, MysqlIntermediary, MysqlShim, ParamParser, QueryResultWriter,
@@ -23,7 +22,7 @@ struct TestingShim<Q, P, E> {
     params: Vec<Column>,
     on_q: Q,
     on_p: P,
-    on_e: E
+    on_e: E,
 }
 
 impl<Q, P, E> MysqlShim<net::TcpStream> for TestingShim<Q, P, E>
@@ -103,9 +102,12 @@ where
             MysqlIntermediary::run_on_tcp(self, s)
         });
 
-        let mut runtime = current_thread::Runtime::new().unwrap();
-
-        runtime.block_on(mysql_async::Pool::new(format!("mysql://127.0.0.1:{}", port)).get_conn().and_then(|conn| c(conn))).unwrap();
+        tokio::runtime::current_thread::block_on_all(
+            mysql_async::Pool::new(format!("mysql://127.0.0.1:{}", port))
+                .get_conn()
+                .and_then(|conn| c(conn)),
+        )
+        .unwrap();
 
         jh.join().unwrap().unwrap();
     }
@@ -217,13 +219,11 @@ fn error_response() {
         db.query("SELECT a, b FROM foo").then(|r| {
             match r {
                 Ok(_) => assert!(false),
-                Err(mysql_async::error::Error::Server(
-                    mysql_async::error::ServerError {
-                        code,
-                        message: ref msg,
-                        ref state,
-                    }
-                )) => {
+                Err(mysql_async::error::Error::Server(mysql_async::error::ServerError {
+                    code,
+                    message: ref msg,
+                    ref state,
+                })) => {
                     assert_eq!(
                         state,
                         &String::from_utf8(err.0.sqlstate().to_vec()).unwrap()
