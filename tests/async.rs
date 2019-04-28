@@ -103,9 +103,7 @@ where
         });
 
         tokio::runtime::current_thread::block_on_all(
-            mysql_async::Pool::new(format!("mysql://127.0.0.1:{}", port))
-                .get_conn()
-                .and_then(|conn| c(conn)),
+            mysql_async::Conn::new(format!("mysql://127.0.0.1:{}", port)).and_then(|conn| c(conn)),
         )
         .unwrap();
 
