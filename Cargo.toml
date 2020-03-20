@@ -29,8 +29,8 @@ byteorder = "1.3.4"
 chrono = "0.4.11"
 
 [dev-dependencies]
-postgres = "0.17.2"
-mysql = "18.0.0"
+postgres = "0.15.2"
+mysql = "17.0.0"
 mysql_async = "0.22.1"
 slab = "0.4.2"
 tokio = "0.2.13"
