@@ -374,21 +374,7 @@ mod tests {
     rt!(u64_one, u64, 1, ColumnType::MYSQL_TYPE_LONGLONG, false);
     rt!(i64_one, i64, 1, ColumnType::MYSQL_TYPE_LONGLONG, true);
 
-    // NOTE:
-    // this test currently doesn't work since `mysql` *always* encodes floats as doubles.
-    // it gets away with this in practice by forcing the parameter types on every query:
-    // https://github.com/blackbeam/rust-mysql-simple/blob/47b7883a7e0eb47a45b06d726a55e89e78c0477e/src/conn/mod.rs#L994
-    // however, since we don't take parameter type forcing into account here, the test won't pass
-    //
-    // rt!(f32_one_float, f32, 1.0, ColumnType::MYSQL_TYPE_FLOAT, false);
-
-    rt!(
-        f32_one_double,
-        f32,
-        1.0,
-        ColumnType::MYSQL_TYPE_DOUBLE,
-        false
-    );
+    rt!(f32_one_float, f32, 1.0, ColumnType::MYSQL_TYPE_FLOAT, false);
     rt!(f64_one, f64, 1.0, ColumnType::MYSQL_TYPE_DOUBLE, false);
 
     rt!(

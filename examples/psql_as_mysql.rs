@@ -8,6 +8,7 @@ extern crate postgres;
 extern crate slab;
 
 use msql_srv::*;
+use mysql::prelude::*;
 use slab::Slab;
 
 use std::io;
@@ -34,10 +35,11 @@ fn main() {
     assert_eq!(db.ping(), true);
     {
         let mut results = db
-            .query("SELECT INT4(1) AS foo, INT8(1) AS bar, 'BAZ' AS baz")
+            .query_iter("SELECT INT4(1) AS foo, INT8(1) AS bar, 'BAZ' AS baz")
             .unwrap();
         {
-            let cols = results.columns_ref();
+            let cols = results.columns();
+            let cols = cols.as_ref();
             assert_eq!(cols.len(), 3);
             assert_eq!(cols[0].name_str(), "foo");
             assert_eq!(cols[1].name_str(), "bar");
@@ -59,10 +61,11 @@ fn main() {
     }
     {
         let mut results = db
-            .prep_exec("SELECT INT4(1) AS foo, INT8(1) AS bar, 'BAZ' AS baz", ())
+            .exec_iter("SELECT INT4(1) AS foo, INT8(1) AS bar, 'BAZ' AS baz", ())
             .unwrap();
         {
-            let cols = results.columns_ref();
+            let cols = results.columns();
+            let cols = cols.as_ref();
             assert_eq!(cols.len(), 3);
             assert_eq!(cols[0].name_str(), "foo");
             assert_eq!(cols[1].name_str(), "bar");

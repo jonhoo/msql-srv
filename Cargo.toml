@@ -1,6 +1,6 @@
 [package]
 name = "msql-srv"
-version = "0.8.8"
+version = "0.9.0"
 edition = "2018"
 
 description = "Bindings for emulating a MySQL/MariaDB server"
@@ -23,15 +23,15 @@ codecov = { repository = "jonhoo/msql-srv", branch = "master", service = "github
 maintenance = { status = "experimental" }
 
 [dependencies]
-nom = "5.0.0"
-mysql_common = "0.19"
+nom = "5"
+mysql_common = "0.22"
 byteorder = "1"
 chrono = "0.4"
 time = "=0.2.7"
 
 [dev-dependencies]
-postgres = "0.15.2"
-mysql = "17.0.0"
+postgres = "0.15"
+mysql = "18"
 mysql_async = "0.20.0"
 slab = "0.4.2"
 tokio = "0.1.19"

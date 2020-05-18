@@ -19,6 +19,7 @@
 //! # use std::net;
 //! # use std::thread;
 //! use msql_srv::*;
+//! use mysql::prelude::*;
 //!
 //! struct Backend;
 //! impl<W: io::Write> MysqlShim<W> for Backend {
@@ -74,7 +75,7 @@
 //!
 //!     let mut db = mysql::Conn::new(&format!("mysql://127.0.0.1:{}", port)).unwrap();
 //!     assert_eq!(db.ping(), true);
-//!     assert_eq!(db.query("SELECT a, b FROM foo").unwrap().count(), 1);
+//!     assert_eq!(db.query_iter("SELECT a, b FROM foo").unwrap().count(), 1);
 //!     drop(db);
 //!     jh.join().unwrap();
 //! }

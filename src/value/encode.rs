@@ -22,9 +22,10 @@ pub trait ToMysqlValue {
 macro_rules! mysql_text_trivial {
     () => {
         fn to_mysql_text<W: Write>(&self, w: &mut W) -> io::Result<()> {
-            w.write_lenenc_str(format!("{}", self).as_bytes()).map(|_| ())
+            w.write_lenenc_str(format!("{}", self).as_bytes())
+                .map(|_| ())
         }
-    }
+    };
 }
 
 use std::fmt;
@@ -557,6 +558,7 @@ impl ToMysqlValue for myc::value::Value {
             myc::value::Value::Int(n) => n.to_mysql_text(w),
             myc::value::Value::UInt(n) => n.to_mysql_text(w),
             myc::value::Value::Float(f) => f.to_mysql_text(w),
+            myc::value::Value::Double(f) => f.to_mysql_text(w),
             myc::value::Value::Date(y, mo, d, h, mi, s, us) => {
                 NaiveDate::from_ymd(i32::from(y), u32::from(mo), u32::from(d))
                     .and_hms_micro(u32::from(h), u32::from(mi), u32::from(s), us)
@@ -621,6 +623,7 @@ impl ToMysqlValue for myc::value::Value {
                 n.to_mysql_bin(w, c)
             }
             myc::value::Value::Float(f) => f.to_mysql_bin(w, c),
+            myc::value::Value::Double(f) => f.to_mysql_bin(w, c),
             myc::value::Value::Date(y, mo, d, h, mi, s, us) => {
                 NaiveDate::from_ymd(i32::from(y), u32::from(mo), u32::from(d))
                     .and_hms_micro(u32::from(h), u32::from(mi), u32::from(s), us)
@@ -812,13 +815,6 @@ mod tests {
         rt!(i64_one, i64, 1, ColumnType::MYSQL_TYPE_LONGLONG, true);
 
         rt!(f32_one, f32, 1.0, ColumnType::MYSQL_TYPE_FLOAT, false);
-        rt!(
-            f32_one_double,
-            f32,
-            1.0,
-            ColumnType::MYSQL_TYPE_DOUBLE,
-            false
-        );
         rt!(f64_one, f64, 1.0, ColumnType::MYSQL_TYPE_DOUBLE, false);
 
         rt!(

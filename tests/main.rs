@@ -4,6 +4,7 @@ extern crate mysql;
 extern crate mysql_common as myc;
 extern crate nom;
 
+use mysql::prelude::*;
 use std::io;
 use std::net;
 use std::thread;
@@ -174,7 +175,7 @@ fn empty_response() {
         |_, _| unreachable!(),
     )
     .test(|db| {
-        assert_eq!(db.query("SELECT a, b FROM foo").unwrap().count(), 0);
+        assert_eq!(db.query_iter("SELECT a, b FROM foo").unwrap().count(), 0);
     })
 }
 
@@ -193,7 +194,7 @@ fn no_rows() {
         |_, _| unreachable!(),
     )
     .test(|db| {
-        assert_eq!(db.query("SELECT a, b FROM foo").unwrap().count(), 0);
+        assert_eq!(db.query_iter("SELECT a, b FROM foo").unwrap().count(), 0);
     })
 }
 
@@ -206,7 +207,7 @@ fn no_columns() {
         |_, _| unreachable!(),
     )
     .test(|db| {
-        assert_eq!(db.query("SELECT a, b FROM foo").unwrap().count(), 0);
+        assert_eq!(db.query_iter("SELECT a, b FROM foo").unwrap().count(), 0);
     })
 }
 
@@ -219,7 +220,7 @@ fn no_columns_but_rows() {
         |_, _| unreachable!(),
     )
     .test(|db| {
-        assert_eq!(db.query("SELECT a, b FROM foo").unwrap().count(), 0);
+        assert_eq!(db.query_iter("SELECT a, b FROM foo").unwrap().count(), 0);
     })
 }
 
@@ -233,7 +234,7 @@ fn error_response() {
         |_, _| unreachable!(),
     )
     .test(|db| {
-        if let mysql::Error::MySqlError(e) = db.query("SELECT a, b FROM foo").unwrap_err() {
+        if let mysql::Error::MySqlError(e) = db.query_iter("SELECT a, b FROM foo").unwrap_err() {
             assert_eq!(
                 e,
                 mysql::error::MySqlError {
@@ -263,7 +264,7 @@ fn empty_on_drop() {
         |_, _| unreachable!(),
     )
     .test(|db| {
-        assert_eq!(db.query("SELECT a, b FROM foo").unwrap().count(), 0);
+        assert_eq!(db.query_iter("SELECT a, b FROM foo").unwrap().count(), 0);
     })
 }
 
@@ -287,7 +288,7 @@ fn it_queries_nulls() {
     )
     .test(|db| {
         let row = db
-            .query("SELECT a, b FROM foo")
+            .query_iter("SELECT a, b FROM foo")
             .unwrap()
             .next()
             .unwrap()
@@ -316,7 +317,7 @@ fn it_queries() {
     )
     .test(|db| {
         let row = db
-            .query("SELECT a, b FROM foo")
+            .query_iter("SELECT a, b FROM foo")
             .unwrap()
             .next()
             .unwrap()
@@ -347,20 +348,24 @@ fn multi_result() {
         |_, _| unreachable!(),
     )
     .test(|db| {
-        let mut result = db.query("SELECT a FROM foo; SELECT a FROM foo").unwrap();
-        assert!(result.more_results_exists());
-        let row1: Vec<_> = result
+        let mut result = db
+            .query_iter("SELECT a FROM foo; SELECT a FROM foo")
+            .unwrap();
+        let mut set = result.next_set().unwrap().unwrap();
+        let row1: Vec<_> = set
             .by_ref()
             .filter_map(|row| row.unwrap().get::<i16, _>(0))
             .collect();
         assert_eq!(row1, vec![1024]);
-        assert!(result.more_results_exists());
-        let row2: Vec<_> = result
+        drop(set);
+        let mut set = result.next_set().unwrap().unwrap();
+        let row2: Vec<_> = set
             .by_ref()
             .filter_map(|row| row.unwrap().get::<i16, _>(0))
             .collect();
         assert_eq!(row2, vec![1025]);
-        assert!(!result.more_results_exists());
+        drop(set);
+        assert!(result.next_set().is_none());
     })
 }
 
@@ -395,7 +400,7 @@ fn it_queries_many_rows() {
     )
     .test(|db| {
         let mut rows = 0;
-        for row in db.query("SELECT a, b FROM foo").unwrap() {
+        for row in db.query_iter("SELECT a, b FROM foo").unwrap() {
             let row = row.unwrap();
             assert_eq!(row.get::<i16, _>(0), Some(1024));
             assert_eq!(row.get::<i16, _>(1), Some(1025));
@@ -447,7 +452,7 @@ fn it_prepares() {
     .with_columns(cols2)
     .test(|db| {
         let row = db
-            .prep_exec("SELECT a FROM b WHERE c = ?", (42i16,))
+            .exec_iter("SELECT a FROM b WHERE c = ?", (42i16,))
             .unwrap()
             .next()
             .unwrap()
@@ -557,7 +562,7 @@ fn insert_exec() {
     .with_params(params)
     .test(|db| {
         let res = db
-            .prep_exec(
+            .exec_iter(
                 "INSERT INTO `users` \
                  (`username`, `email`, `password_digest`, `created_at`, \
                  `session_token`, `rss_token`, `mailing_list_token`) \
@@ -574,7 +579,7 @@ fn insert_exec() {
             )
             .unwrap();
         assert_eq!(res.affected_rows(), 42);
-        assert_eq!(res.last_insert_id(), 1);
+        assert_eq!(res.last_insert_id(), Some(1));
     })
 }
 
@@ -620,7 +625,7 @@ fn send_long() {
     .with_columns(cols2)
     .test(|db| {
         let row = db
-            .prep_exec("SELECT a FROM b WHERE c = ?", (b"Hello world",))
+            .exec_iter("SELECT a FROM b WHERE c = ?", (b"Hello world",))
             .unwrap()
             .next()
             .unwrap()
@@ -670,7 +675,7 @@ fn it_prepares_many() {
     .with_columns(cols2)
     .test(|db| {
         let mut rows = 0;
-        for row in db.prep_exec("SELECT a, b FROM x", ()).unwrap() {
+        for row in db.exec_iter("SELECT a, b FROM x", ()).unwrap() {
             let row = row.unwrap();
             assert_eq!(row.get::<i16, _>(0), Some(1024));
             assert_eq!(row.get::<i16, _>(1), Some(1025));
@@ -709,7 +714,7 @@ fn prepared_empty() {
     .with_columns(cols2)
     .test(|db| {
         assert_eq!(
-            db.prep_exec("SELECT a FROM b WHERE c = ?", (42i16,))
+            db.exec_iter("SELECT a FROM b WHERE c = ?", (42i16,))
                 .unwrap()
                 .count(),
             0
@@ -742,7 +747,7 @@ fn prepared_no_params() {
     .with_params(params)
     .with_columns(cols2)
     .test(|db| {
-        let row = db.prep_exec("foo", ()).unwrap().next().unwrap().unwrap();
+        let row = db.exec_iter("foo", ()).unwrap().next().unwrap().unwrap();
         assert_eq!(row.get::<i16, _>(0), Some(1024i16));
     })
 }
@@ -807,7 +812,7 @@ fn prepared_nulls() {
     .with_columns(cols2)
     .test(|db| {
         let row = db
-            .prep_exec(
+            .exec_iter(
                 "SELECT a, b FROM x WHERE c = ? AND d = ?",
                 (mysql::Value::NULL, 42),
             )
@@ -837,7 +842,7 @@ fn prepared_no_rows() {
     )
     .with_columns(cols2)
     .test(|db| {
-        assert_eq!(db.prep_exec("SELECT a, b FROM foo", ()).unwrap().count(), 0);
+        assert_eq!(db.exec_iter("SELECT a, b FROM foo", ()).unwrap().count(), 0);
     })
 }
 
@@ -850,7 +855,7 @@ fn prepared_no_cols_but_rows() {
         |_, _| unreachable!(),
     )
     .test(|db| {
-        assert_eq!(db.prep_exec("SELECT a, b FROM foo", ()).unwrap().count(), 0);
+        assert_eq!(db.exec_iter("SELECT a, b FROM foo", ()).unwrap().count(), 0);
     })
 }
 
@@ -863,7 +868,7 @@ fn prepared_no_cols() {
         |_, _| unreachable!(),
     )
     .test(|db| {
-        assert_eq!(db.prep_exec("SELECT a, b FROM foo", ()).unwrap().count(), 0);
+        assert_eq!(db.exec_iter("SELECT a, b FROM foo", ()).unwrap().count(), 0);
     })
 }
 
@@ -880,6 +885,6 @@ fn really_long_query() {
         |_, _| unreachable!(),
     )
     .test(move |db| {
-        db.query(long).unwrap();
+        db.query_iter(long).unwrap();
     })
 }
