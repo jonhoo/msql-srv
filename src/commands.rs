@@ -1,5 +1,4 @@
 use crate::myc::constants::{CapabilityFlags, Command as CommandByte};
-use nom;
 
 #[derive(Debug)]
 pub struct ClientHandshake<'a> {
@@ -10,21 +9,49 @@ pub struct ClientHandshake<'a> {
 }
 
 pub fn client_handshake(i: &[u8]) -> nom::IResult<&[u8], ClientHandshake<'_>> {
-    let (i, cap) = nom::number::complete::le_u32(i)?;
-    let (i, maxps) = nom::number::complete::le_u32(i)?;
-    let (i, collation) = nom::bytes::complete::take(1u8)(i)?;
-    let (i, _) = nom::bytes::complete::take(23u8)(i)?;
-    let (i, username) = nom::bytes::complete::take_until(&b"\0"[..])(i)?;
-    let (i, _) = nom::bytes::complete::tag(b"\0")(i)?;
-    Ok((
-        i,
-        ClientHandshake {
-            capabilities: CapabilityFlags::from_bits_truncate(cap),
-            maxps,
-            collation: u16::from(collation[0]),
-            username,
-        },
-    ))
+    // mysql handshake protocol documentation
+    // https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_connection_phase_packets_protocol_handshake_response.html
+
+    let (i, cap) = nom::number::complete::le_u16(i)?;
+
+    if CapabilityFlags::from_bits_truncate(cap as u32).contains(CapabilityFlags::CLIENT_PROTOCOL_41)
+    {
+        // HandshakeResponse41
+        let (i, cap2) = nom::number::complete::le_u16(i)?;
+        let cap = (cap2 as u32) << 16 | cap as u32;
+
+        let (i, maxps) = nom::number::complete::le_u32(i)?;
+        let (i, collation) = nom::bytes::complete::take(1u8)(i)?;
+        let (i, _) = nom::bytes::complete::take(23u8)(i)?;
+        let (i, username) = nom::bytes::complete::take_until(&b"\0"[..])(i)?;
+        let (i, _) = nom::bytes::complete::tag(b"\0")(i)?;
+
+        Ok((
+            i,
+            ClientHandshake {
+                capabilities: CapabilityFlags::from_bits_truncate(cap),
+                maxps,
+                collation: u16::from(collation[0]),
+                username,
+            },
+        ))
+    } else {
+        // HandshakeResponse320
+        let (i, maxps1) = nom::number::complete::le_u16(i)?;
+        let (i, maxps2) = nom::number::complete::le_u8(i)?;
+        let maxps = (maxps2 as u32) << 16 | maxps1 as u32;
+        let (i, username) = nom::bytes::complete::take_until(&b"\0"[..])(i)?;
+
+        Ok((
+            i,
+            ClientHandshake {
+                capabilities: CapabilityFlags::from_bits_truncate(cap as u32),
+                maxps,
+                collation: 0,
+                username,
+            },
+        ))
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
