@@ -1,5 +1,4 @@
 use byteorder::{ByteOrder, LittleEndian};
-use nom;
 use std::io;
 use std::io::prelude::*;
 
@@ -164,12 +163,10 @@ impl<'a> Packet<'a> {
                 self.1.extend(bytes);
             }
         } else {
-            use std::mem;
-
             assert!(self.1.is_empty());
             let mut v = self.0.to_vec();
             v.extend(bytes);
-            mem::replace(&mut self.1, v);
+            self.1 = v;
             self.0 = &[];
         }
     }
