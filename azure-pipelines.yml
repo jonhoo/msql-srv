@@ -1,7 +1,7 @@
 jobs:
  - template: default.yml@templates
    parameters:
-     minrust: 1.36.0 # tinyvec
+     minrust: 1.37.0 # static-assertions
      codecov_token: $(CODECOV_TOKEN_SECRET)
 
 resources:
