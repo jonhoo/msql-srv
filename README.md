@@ -2,8 +2,9 @@
 
 [![Crates.io](https://img.shields.io/crates/v/msql_srv.svg)](https://crates.io/crates/msql_srv)
 [![Documentation](https://docs.rs/msql-srv/badge.svg)](https://docs.rs/msql-srv/)
-[![Build Status](https://travis-ci.com/jonhoo/msql-srv.svg?branch=master)](https://travis-ci.com/jonhoo/msql-srv)
+[![Build Status](https://dev.azure.com/jonhoo/jonhoo/_apis/build/status/msql-srv?branchName=master)](https://dev.azure.com/jonhoo/jonhoo/_build/latest?definitionId=27&branchName=master)
 [![Codecov](https://codecov.io/github/jonhoo/msql-srv/coverage.svg?branch=master)](https://codecov.io/gh/jonhoo/msql-srv)
+![Maintenance](https://img.shields.io/badge/maintenance-experimental-blue.svg)
 
 Bindings for emulating a MySQL/MariaDB server.
 

@@ -18,7 +18,7 @@ categories = ["api-bindings", "network-programming", "database-implementations"]
 license = "MIT/Apache-2.0"
 
 [badges]
-travis-ci = { repository = "jonhoo/msql-srv" }
+azure-devops = { project = "jonhoo/jonhoo", pipeline = "msql-srv", build = "27" }
 codecov = { repository = "jonhoo/msql-srv", branch = "master", service = "github" }
 maintenance = { status = "experimental" }
 
