@@ -1,5 +1,4 @@
 use byteorder::{ByteOrder, LittleEndian};
-use nom;
 use std::io;
 use std::io::prelude::*;
 
