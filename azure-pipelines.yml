@@ -1,0 +1,15 @@
+jobs:
+ - template: default.yml@templates
+   parameters:
+     minrust: 1.39.0 # bytes
+     # re-enable coverage when we're on a newer version of time:
+     # https://github.com/time-rs/time/pull/265
+     # codecov_token: $(CODECOV_TOKEN_SECRET)
+
+resources:
+  repositories:
+    - repository: templates
+      type: github
+      name: crate-ci/azure-pipelines
+      ref: refs/heads/v0.4
+      endpoint: jonhoo

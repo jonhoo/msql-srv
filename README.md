@@ -2,8 +2,9 @@
 
 [![Crates.io](https://img.shields.io/crates/v/msql_srv.svg)](https://crates.io/crates/msql_srv)
 [![Documentation](https://docs.rs/msql-srv/badge.svg)](https://docs.rs/msql-srv/)
-[![Build Status](https://travis-ci.com/jonhoo/msql-srv.svg?branch=master)](https://travis-ci.com/jonhoo/msql-srv)
+[![Build Status](https://dev.azure.com/jonhoo/jonhoo/_apis/build/status/msql-srv?branchName=master)](https://dev.azure.com/jonhoo/jonhoo/_build/latest?definitionId=27&branchName=master)
 [![Codecov](https://codecov.io/github/jonhoo/msql-srv/coverage.svg?branch=master)](https://codecov.io/gh/jonhoo/msql-srv)
+![Maintenance](https://img.shields.io/badge/maintenance-experimental-blue.svg)
 
 Bindings for emulating a MySQL/MariaDB server.
 
@@ -22,6 +23,7 @@ all commands with a "no results" reply:
 ```rust
 extern crate mysql;
 use msql_srv::*;
+use mysql::prelude::*;
 
 struct Backend;
 impl<W: io::Write> MysqlShim<W> for Backend {
@@ -77,7 +79,7 @@ fn main() {
 
     let mut db = mysql::Conn::new(&format!("mysql://127.0.0.1:{}", port)).unwrap();
     assert_eq!(db.ping(), true);
-    assert_eq!(db.query("SELECT a, b FROM foo").unwrap().count(), 1);
+    assert_eq!(db.query_iter("SELECT a, b FROM foo").unwrap().count(), 1);
     drop(db);
     jh.join().unwrap();
 }
