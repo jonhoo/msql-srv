@@ -166,24 +166,7 @@ fn it_inits_on_use_query_ok() {
             writer.ok()
         },
     )
-    .test(|db| match db.query_drop("USE test") {
-        Ok(_) => assert!(true),
-        Err(_) => assert!(false),
-    });
-}
-
-#[test]
-fn it_inits_on_use_query_semicolon_ok() {
-    TestingShim::new(
-        |_, _| unreachable!(),
-        |_| unreachable!(),
-        |_, _, _| unreachable!(),
-        |schema, writer| {
-            assert_eq!(schema, "test");
-            writer.ok()
-        },
-    )
-    .test(|db| match db.query_drop("USE test;") {
+    .test(|db| match db.query_drop("USE `test`;") {
         Ok(_) => assert!(true),
         Err(_) => assert!(false),
     });

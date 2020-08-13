@@ -95,7 +95,6 @@
 
 extern crate mysql_common as myc;
 
-use regex::Regex;
 use std::collections::HashMap;
 use std::io;
 use std::io::prelude::*;
@@ -324,12 +323,9 @@ impl<B: MysqlShim<W>, R: Read, W: Write> MysqlIntermediary<B, R, W> {
                         let w = InitWriter {
                             writer: &mut self.writer,
                         };
-                        let qstr = ::std::str::from_utf8(q)
-                                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-                        let re = Regex::new(r"^(?i)USE (?P<schema>[^@\s]+);?")
-                                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-                        let captures = re.captures(qstr).unwrap();
-                        let schema = captures.name("schema").unwrap().as_str().replace(";", "");
+                        let schema = ::std::str::from_utf8(&q[3..])
+                            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                        let schema = schema.trim().strip_suffix(';').unwrap().replace("`", "");
                         self.shim.on_init(&schema, w)?;
                     } else {
                         let w = QueryResultWriter::new(&mut self.writer, false);
