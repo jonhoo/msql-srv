@@ -28,6 +28,7 @@ mysql_common = "0.22"
 byteorder = "1"
 chrono = "0.4"
 time = "=0.2.7"
+regex = "1"
 
 [dev-dependencies]
 postgres = "0.15"
