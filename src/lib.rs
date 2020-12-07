@@ -101,7 +101,7 @@ use std::io::prelude::*;
 use std::iter;
 use std::net;
 
-pub use crate::myc::constants::{ColumnFlags, ColumnType, StatusFlags};
+pub use crate::myc::constants::{ColumnFlags, CapabilityFlags, ColumnType, StatusFlags};
 
 mod commands;
 mod errorcodes;
@@ -238,15 +238,22 @@ impl<B: MysqlShim<W>, R: Read, W: Write> MysqlIntermediary<B, R, W> {
     fn init(&mut self) -> Result<(), B::Error> {
         self.writer.write_all(&[10])?; // protocol 10
 
+        let mut capabilities = CapabilityFlags::empty();
+        capabilities.insert(CapabilityFlags::CLIENT_PROTOCOL_41);
+        capabilities.insert(CapabilityFlags::CLIENT_RESERVED);
+        capabilities.insert(CapabilityFlags::CLIENT_SECURE_CONNECTION);
+        capabilities.insert(CapabilityFlags::CLIENT_PLUGIN_AUTH);
+        let capabilities_bytes = capabilities.bits().to_le_bytes();
+
         // 5.1.10 because that's what Ruby's ActiveRecord requires
         self.writer.write_all(&b"5.1.10-alpha-msql-proxy\0"[..])?;
 
         self.writer.write_all(&[0x08, 0x00, 0x00, 0x00])?; // TODO: connection ID
         self.writer.write_all(&b";X,po_k}\0"[..])?; // auth seed
-        self.writer.write_all(&[0x00, 0x42])?; // just 4.1 proto
+        self.writer.write_all(&capabilities_bytes[..2])?; // just 4.1 proto
         self.writer.write_all(&[0x21])?; // UTF8_GENERAL_CI
         self.writer.write_all(&[0x00, 0x00])?; // status flags
-        self.writer.write_all(&[0x00, 0x00])?; // extended capabilities
+        self.writer.write_all(&capabilities_bytes[2..])?; // extended capabilities
         self.writer.write_all(&[0x00])?; // no plugins
         self.writer.write_all(&[0x00; 6][..])?; // filler
         self.writer.write_all(&[0x00; 4][..])?; // filler
