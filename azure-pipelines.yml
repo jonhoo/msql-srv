@@ -1,10 +1,8 @@
 jobs:
- - template: default.yml@templates
-   parameters:
-     minrust: 1.39.0 # bytes
-     # re-enable coverage when we're on a newer version of time:
-     # https://github.com/time-rs/time/pull/265
-     # codecov_token: $(CODECOV_TOKEN_SECRET)
+  - template: default.yml@templates
+    parameters:
+      minrust: 1.42
+      codecov_token: $(CODECOV_TOKEN_SECRET)
 
 resources:
   repositories:
