@@ -527,20 +527,24 @@ impl ToMysqlValue for Duration {
 
         match c.coltype {
             ColumnType::MYSQL_TYPE_TIME => {
-                if us != 0 {
-                    w.write_u8(12u8)?;
+                if self.as_secs() == 0 && us == 0 {
+                    w.write_u8(0u8)?;
                 } else {
-                    w.write_u8(8u8)?;
-                }
+                    if us != 0 {
+                        w.write_u8(12u8)?;
+                    } else {
+                        w.write_u8(8u8)?;
+                    }
 
-                w.write_u8(0u8)?; // positive only (for now)
-                w.write_u32::<LittleEndian>(d as u32)?;
-                w.write_u8(h as u8)?;
-                w.write_u8(m as u8)?;
-                w.write_u8(s as u8)?;
+                    w.write_u8(0u8)?; // positive only (for now)
+                    w.write_u32::<LittleEndian>(d as u32)?;
+                    w.write_u8(h as u8)?;
+                    w.write_u8(m as u8)?;
+                    w.write_u8(s as u8)?;
 
-                if us != 0 {
-                    w.write_u32::<LittleEndian>(us)?;
+                    if us != 0 {
+                        w.write_u32::<LittleEndian>(us)?;
+                    }
                 }
                 Ok(())
             }
@@ -719,6 +723,8 @@ mod tests {
             chrono::Utc.ymd(1989, 12, 7).and_hms(8, 0, 4).naive_utc()
         );
         rt!(dur, time::Duration, time::Duration::from_secs(1893));
+        rt!(dur_micro, time::Duration, time::Duration::new(1893, 5000));
+        rt!(dur_zero, time::Duration, time::Duration::from_secs(0));
         rt!(bytes, Vec<u8>, vec![0x42, 0x00, 0x1a]);
         rt!(string, String, "foobar".to_owned());
     }

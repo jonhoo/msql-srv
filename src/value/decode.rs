@@ -251,27 +251,31 @@ use std::time::Duration;
 impl<'a> Into<Duration> for Value<'a> {
     fn into(self) -> Duration {
         if let ValueInner::Time(mut v) = self.0 {
-            assert!(v.len() == 8 || v.len() == 12);
+            assert!(v.len() == 0 || v.len() == 8 || v.len() == 12);
 
-            let neg = v.read_u8().unwrap();
-            if neg != 0u8 {
-                unimplemented!();
-            }
-
-            let days = u64::from(v.read_u32::<LittleEndian>().unwrap());
-            let hours = u64::from(v.read_u8().unwrap());
-            let minutes = u64::from(v.read_u8().unwrap());
-            let seconds = u64::from(v.read_u8().unwrap());
-            let micros = if v.len() == 12 {
-                v.read_u32::<LittleEndian>().unwrap()
+            if v.len() == 0 {
+                Duration::from_secs(0)
             } else {
-                0
-            };
+                let neg = v.read_u8().unwrap();
+                if neg != 0u8 {
+                    unimplemented!();
+                }
 
-            Duration::new(
-                days * 86_400 + hours * 3_600 + minutes * 60 + seconds,
-                micros * 1_000,
-            )
+                let days = u64::from(v.read_u32::<LittleEndian>().unwrap());
+                let hours = u64::from(v.read_u8().unwrap());
+                let minutes = u64::from(v.read_u8().unwrap());
+                let seconds = u64::from(v.read_u8().unwrap());
+                let micros = if v.len() == 12 {
+                    v.read_u32::<LittleEndian>().unwrap()
+                } else {
+                    0
+                };
+
+                Duration::new(
+                    days * 86_400 + hours * 3_600 + minutes * 60 + seconds,
+                    micros * 1_000,
+                )
+            }
         } else {
             panic!("invalid type conversion from {:?} to datetime", self)
         }
@@ -450,6 +454,12 @@ mod tests {
         dur,
         time::Duration,
         time::Duration::from_secs(1893),
+        ColumnType::MYSQL_TYPE_TIME
+    );
+    rt!(
+        dur_zero,
+        time::Duration,
+        time::Duration::from_secs(0),
         ColumnType::MYSQL_TYPE_TIME
     );
     rt!(
