@@ -98,6 +98,7 @@ extern crate mysql_common as myc;
 use std::collections::HashMap;
 use std::io;
 use std::io::prelude::*;
+use std::io::Write;
 use std::iter;
 use std::net;
 
@@ -253,39 +254,45 @@ impl<B: MysqlShim<W>, R: Read, W: Write> MysqlIntermediary<B, R, W> {
         self.writer.write_all(&b">o6^Wz!/kM}N\0"[..])?; // 4.1+ servers must extend salt
         self.writer.flush()?;
 
-        {
-            let (seq, handshake) = self.reader.next()?.ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::ConnectionAborted,
-                    "peer terminated connection",
-                )
-            })?;
-            let _handshake = commands::client_handshake(&handshake)
-                .map_err(|e| match e {
-                    nom::Err::Incomplete(_) => io::Error::new(
-                        io::ErrorKind::UnexpectedEof,
-                        "client sent incomplete handshake",
-                    ),
-                    nom::Err::Failure((input, nom_e_kind))
-                    | nom::Err::Error((input, nom_e_kind)) => {
-                        if let nom::error::ErrorKind::Eof = nom_e_kind {
-                            io::Error::new(
-                                io::ErrorKind::UnexpectedEof,
-                                format!("client did not complete handshake; got {:?}", input),
-                            )
-                        } else {
-                            io::Error::new(
-                                io::ErrorKind::InvalidData,
-                                format!("bad client handshake; got {:?} ({:?})", input, nom_e_kind),
-                            )
-                        }
+        let (seq, handshake) = self.reader.next()?.ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "peer terminated connection",
+            )
+        })?;
+        let handshake = commands::client_handshake(&handshake)
+            .map_err(|e| match e {
+                nom::Err::Incomplete(_) => io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "client sent incomplete handshake",
+                ),
+                nom::Err::Failure((input, nom_e_kind)) | nom::Err::Error((input, nom_e_kind)) => {
+                    if let nom::error::ErrorKind::Eof = nom_e_kind {
+                        io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            format!("client did not complete handshake; got {:?}", input),
+                        )
+                    } else {
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!("bad client handshake; got {:?} ({:?})", input, nom_e_kind),
+                        )
                     }
-                })?
-                .1;
-            self.writer.set_seq(seq + 1);
+                }
+            })?
+            .1;
+        self.writer.set_seq(seq + 1);
+        if let Some(Ok(database)) = handshake.database.map(std::str::from_utf8) {
+            self.shim.on_init(
+                database,
+                InitWriter {
+                    writer: &mut self.writer,
+                },
+            )?;
+        } else {
+            writers::write_ok_packet(&mut self.writer, 0, 0, StatusFlags::empty())?;
         }
 
-        writers::write_ok_packet(&mut self.writer, 0, 0, StatusFlags::empty())?;
         self.writer.flush()?;
 
         Ok(())
