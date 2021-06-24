@@ -64,13 +64,14 @@ where
     w.write_u16::<LittleEndian>(0)?; // number of warnings
     w.end_packet()?;
 
-    write_column_definitions(pi, w, true)?;
-    write_column_definitions(ci, w, true)
+    write_column_definitions(pi, w, false, true)?;
+    write_column_definitions(ci, w, false, true)
 }
 
 pub(crate) fn write_column_definitions<'a, I, W>(
     i: I,
     w: &mut PacketWriter<W>,
+    is_comm_field_list_response: bool,
     only_eof_on_nonempty: bool,
 ) -> io::Result<()>
 where
@@ -94,6 +95,14 @@ where
         w.write_u16::<LittleEndian>(c.colflags.bits())?;
         w.write_all(&[0x00])?; // decimals
         w.write_all(&[0x00, 0x00])?; // unused
+
+        if is_comm_field_list_response {
+            // We should write length encoded int with string size
+            // followed by string with some "default values" (possibly it's column defaults).
+            // But we just send NULL for simplicity
+            w.write_u8(0xfb)?;
+        }
+
         w.end_packet()?;
         empty = false;
     }
@@ -114,5 +123,5 @@ where
     let i = i.into_iter();
     w.write_lenenc_int(i.len() as u64)?;
     w.end_packet()?;
-    write_column_definitions(i, w, false)
+    write_column_definitions(i, w, false, false)
 }

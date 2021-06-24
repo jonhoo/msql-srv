@@ -312,8 +312,8 @@ impl<B: MysqlShim<W>, R: Read, W: Write> MysqlIntermediary<B, R, W> {
             let cmd = commands::parse(&packet).unwrap().1;
             match cmd {
                 Command::Query(q) => {
-                    let w = QueryResultWriter::new(&mut self.writer, false);
                     if q.starts_with(b"SELECT @@") || q.starts_with(b"select @@") {
+                        let w = QueryResultWriter::new(&mut self.writer, false);
                         let var = &q[b"SELECT @@".len()..];
                         match var {
                             b"max_allowed_packet" => {
@@ -331,7 +331,16 @@ impl<B: MysqlShim<W>, R: Read, W: Write> MysqlIntermediary<B, R, W> {
                                 w.completed(0, 0)?;
                             }
                         }
+                    } else if q.starts_with(b"USE ") || q.starts_with(b"use ") {
+                        let w = InitWriter {
+                            writer: &mut self.writer,
+                        };
+                        let schema = ::std::str::from_utf8(&q[b"USE ".len()..])
+                            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                        let schema = schema.trim().trim_end_matches(';').trim_matches('`');
+                        self.shim.on_init(&schema, w)?;
                     } else {
+                        let w = QueryResultWriter::new(&mut self.writer, false);
                         self.shim.on_query(
                             ::std::str::from_utf8(q)
                                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
@@ -391,7 +400,7 @@ impl<B: MysqlShim<W>, R: Read, W: Write> MysqlIntermediary<B, R, W> {
                         coltype: myc::constants::ColumnType::MYSQL_TYPE_SHORT,
                         colflags: myc::constants::ColumnFlags::UNSIGNED_FLAG,
                     }];
-                    writers::write_column_definitions(cols, &mut self.writer, true)?;
+                    writers::write_column_definitions(cols, &mut self.writer, true, true)?;
                 }
                 Command::Init(schema) => {
                     let w = InitWriter {

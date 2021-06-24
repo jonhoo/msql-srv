@@ -156,6 +156,23 @@ fn it_inits_error() {
 }
 
 #[test]
+fn it_inits_on_use_query_ok() {
+    TestingShim::new(
+        |_, _| unreachable!(),
+        |_| unreachable!(),
+        |_, _, _| unreachable!(),
+        |schema, writer| {
+            assert_eq!(schema, "test");
+            writer.ok()
+        },
+    )
+    .test(|db| match db.query_drop("USE `test`;") {
+        Ok(_) => assert!(true),
+        Err(_) => assert!(false),
+    });
+}
+
+#[test]
 fn it_pings() {
     TestingShim::new(
         |_, _| unreachable!(),

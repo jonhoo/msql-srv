@@ -251,7 +251,11 @@ use std::time::Duration;
 impl<'a> Into<Duration> for Value<'a> {
     fn into(self) -> Duration {
         if let ValueInner::Time(mut v) = self.0 {
-            assert!(v.len() == 8 || v.len() == 12);
+            assert!(v.len() == 0 || v.len() == 8 || v.len() == 12);
+
+            if v.len() == 0 {
+                return Duration::from_secs(0);
+            }
 
             let neg = v.read_u8().unwrap();
             if neg != 0u8 {
@@ -450,6 +454,12 @@ mod tests {
         dur,
         time::Duration,
         time::Duration::from_secs(1893),
+        ColumnType::MYSQL_TYPE_TIME
+    );
+    rt!(
+        dur_zero,
+        time::Duration,
+        time::Duration::from_secs(0),
         ColumnType::MYSQL_TYPE_TIME
     );
     rt!(
