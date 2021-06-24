@@ -31,7 +31,7 @@ time = "0.2.25"
 
 [dev-dependencies]
 postgres = "0.15"
-mysql = "18"
+mysql = "20.1.0"
 mysql_async = "0.20.0"
 slab = "0.4.2"
 tokio = "0.1.19"
