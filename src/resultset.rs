@@ -351,6 +351,10 @@ impl<'a> RowWriter<'a> {
             self.end_row()?;
         }
 
+        Ok(())
+    }
+
+    fn finish_completed(&mut self) -> io::Result<()> {
         if self.columns.is_empty() {
             // response to no column query is always an OK packet
             // we've kept track of the number of rows in col (hacky, I know)
@@ -362,12 +366,17 @@ impl<'a> RowWriter<'a> {
             // we wrote out at least one row
             self.result.as_mut().unwrap().last_end = Some(Finalizer::EOF);
         }
+
         Ok(())
     }
 
     /// Indicate to the client that no more rows are coming.
-    pub fn finish(self) -> io::Result<()> {
-        self.finish_one()?.no_more_results()
+    pub fn finish(mut self) -> io::Result<()> {
+        self.finish_inner()?;
+
+        self.finish_completed()?;
+
+        self.result.take().unwrap().no_more_results()
     }
 
     /// End this resultset response, and indicate to the client that no more rows are coming.
@@ -376,6 +385,14 @@ impl<'a> RowWriter<'a> {
         // we know that dropping self will see self.finished == true,
         // and so Drop won't try to use self.result.
         Ok(self.result.take().unwrap())
+    }
+
+    /// End this resultset response, and indicate to the client there was an error.
+    pub fn finish_error<E>(self, kind: ErrorKind, msg: &E) -> io::Result<()>
+    where
+        E: Borrow<[u8]>,
+    {
+        self.finish_one()?.error(kind, msg)
     }
 }
 
