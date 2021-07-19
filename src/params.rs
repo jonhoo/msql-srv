@@ -61,6 +61,7 @@ pub struct ParamValue<'a> {
 impl<'a> Iterator for Params<'a> {
     type Item = ParamValue<'a>;
     fn next(&mut self) -> Option<Self::Item> {
+        use std::convert::TryFrom;
         if self.nullmap.is_none() {
             let nullmap_len = (self.params as usize + 7) / 8;
             let (nullmap, rest) = self.input.split_at(nullmap_len);
@@ -72,7 +73,7 @@ impl<'a> Iterator for Params<'a> {
                 self.bound_types.clear();
                 for i in 0..self.params as usize {
                     self.bound_types.push((
-                        myc::constants::ColumnType::from(typmap[2 * i as usize]),
+                        myc::constants::ColumnType::try_from(typmap[2 * i as usize]).unwrap(),
                         (typmap[2 * i as usize + 1] & 128) != 0,
                     ));
                 }
