@@ -106,7 +106,10 @@ where
             MysqlIntermediary::run_on_tcp(self, s)
         });
 
-        let mut db = mysql::Conn::new(&format!("mysql://127.0.0.1:{}", port)).unwrap();
+        let mut db = mysql::Conn::new(
+            mysql::Opts::from_url(&format!("mysql://127.0.0.1:{}", port)).unwrap(),
+        )
+        .unwrap();
         c(&mut db);
         drop(db);
         jh.join().unwrap().unwrap();
