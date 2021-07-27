@@ -27,7 +27,6 @@ nom = "7.0.0-alpha1"
 mysql_common = "0.27"
 byteorder = "1.4"
 chrono = "0.4"
-time = "0.2"
 
 [dev-dependencies]
 postgres = "0.15"
