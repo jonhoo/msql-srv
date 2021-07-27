@@ -35,3 +35,4 @@ mysql_async = "0.20.0"
 slab = "0.4.3"
 tokio = { version = "1.0", features = ["full"] }
 futures = "0.1.26"
+bytes = "1"
