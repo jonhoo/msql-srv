@@ -49,11 +49,7 @@ impl<'a> Value<'a> {
 
     /// Returns true if this is a NULL value
     pub fn is_null(&self) -> bool {
-        if let ValueInner::NULL = self.0 {
-            true
-        } else {
-            false
-        }
+        matches!(self.0, ValueInner::NULL)
     }
 
     pub(crate) fn parse_from(
@@ -251,9 +247,9 @@ use std::time::Duration;
 impl<'a> Into<Duration> for Value<'a> {
     fn into(self) -> Duration {
         if let ValueInner::Time(mut v) = self.0 {
-            assert!(v.len() == 0 || v.len() == 8 || v.len() == 12);
+            assert!(v.is_empty() || v.len() == 8 || v.len() == 12);
 
-            if v.len() == 0 {
+            if v.is_empty() {
                 return Duration::from_secs(0);
             }
 
