@@ -10,4 +10,4 @@ resources:
       type: github
       name: crate-ci/azure-pipelines
       ref: refs/heads/v0.4
-      endpoint: jonhoo
+      endpoint: datafuse-extras-msql-srv
