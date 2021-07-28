@@ -93,7 +93,7 @@ where
     fn test<C, F>(self, c: C)
     where
         F: IntoFuture<Item = (), Error = mysql_async::error::Error>,
-        C: FnOnce(mysql_async::Conn) -> F,
+        C: FnOnce(mysql_async::Conn) -> F + Send + Sync + 'static,
     {
         let listener = net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -102,10 +102,14 @@ where
             MysqlIntermediary::run_on_tcp(self, s)
         });
 
-        tokio::runtime::current_thread::block_on_all(
-            mysql_async::Conn::new(format!("mysql://127.0.0.1:{}", port)).and_then(|conn| c(conn)),
-        )
-        .unwrap();
+        // Create the runtime
+        let rt = tokio::runtime::Runtime::new().unwrap();
+
+        rt.spawn_blocking(move || {
+            mysql_async::Conn::new(format!("mysql://127.0.0.1:{}", port))
+                .and_then(|conn| c(conn))
+                .wait()
+        });
 
         jh.join().unwrap().unwrap();
     }
@@ -227,8 +231,8 @@ fn error_response() {
         |_| unreachable!(),
         |_, _, _| unreachable!(),
     )
-    .test(|db| {
-        db.query("SELECT a, b FROM foo").then(|r| {
+    .test(move |db| {
+        db.query("SELECT a, b FROM foo").then(move |r| {
             match r {
                 Ok(_) => assert!(false),
                 Err(mysql_async::error::Error::Server(mysql_async::error::ServerError {

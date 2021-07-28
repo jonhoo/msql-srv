@@ -73,7 +73,10 @@
 //!         }
 //!     });
 //!
-//!     let mut db = mysql::Conn::new(&format!("mysql://127.0.0.1:{}", port)).unwrap();
+//!     let mut db = mysql::Conn::new(
+//!         mysql::Opts::from_url(&format!("mysql://127.0.0.1:{}", port)).unwrap(),
+//!     )
+//!     .unwrap();
 //!     assert_eq!(db.ping(), true);
 //!     assert_eq!(db.query_iter("SELECT a, b FROM foo").unwrap().count(), 1);
 //!     drop(db);
@@ -82,6 +85,7 @@
 //! ```
 #![deny(missing_docs)]
 #![deny(rust_2018_idioms)]
+#![allow(clippy::from_over_into)]
 
 // Note to developers: you can find decent overviews of the protocol at
 //
@@ -266,17 +270,22 @@ impl<B: MysqlShim<W>, R: Read, W: Write> MysqlIntermediary<B, R, W> {
                         io::ErrorKind::UnexpectedEof,
                         "client sent incomplete handshake",
                     ),
-                    nom::Err::Failure((input, nom_e_kind))
-                    | nom::Err::Error((input, nom_e_kind)) => {
-                        if let nom::error::ErrorKind::Eof = nom_e_kind {
+                    nom::Err::Failure(nom_error) | nom::Err::Error(nom_error) => {
+                        if let nom::error::ErrorKind::Eof = nom_error.code {
                             io::Error::new(
                                 io::ErrorKind::UnexpectedEof,
-                                format!("client did not complete handshake; got {:?}", input),
+                                format!(
+                                    "client did not complete handshake; got {:?}",
+                                    nom_error.input
+                                ),
                             )
                         } else {
                             io::Error::new(
                                 io::ErrorKind::InvalidData,
-                                format!("bad client handshake; got {:?} ({:?})", input, nom_e_kind),
+                                format!(
+                                    "bad client handshake; got {:?} ({:?})",
+                                    nom_error.input, nom_error.code
+                                ),
                             )
                         }
                     }
@@ -326,7 +335,7 @@ impl<B: MysqlShim<W>, R: Read, W: Write> MysqlIntermediary<B, R, W> {
                         let schema = ::std::str::from_utf8(&q[b"USE ".len()..])
                             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
                         let schema = schema.trim().trim_end_matches(';').trim_matches('`');
-                        self.shim.on_init(&schema, w)?;
+                        self.shim.on_init(schema, w)?;
                     } else {
                         let w = QueryResultWriter::new(&mut self.writer, false);
                         self.shim.on_query(

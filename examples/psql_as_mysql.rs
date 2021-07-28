@@ -21,17 +21,16 @@ fn main() {
 
     let jh = thread::spawn(move || {
         if let Ok((s, _)) = listener.accept() {
-            let conn = postgres::Connection::connect(
-                "postgresql://postgres@localhost:5432",
-                postgres::TlsMode::None,
-            )
-            .unwrap();
+            let conn =
+                postgres::Client::connect("host=localhost user=postgres", postgres::NoTls).unwrap();
             MysqlIntermediary::run_on_tcp(Postgres::new(conn), s).unwrap();
         }
     });
 
     // we connect using MySQL bindings, but no MySQL server is running!
-    let mut db = mysql::Conn::new(&format!("mysql://127.0.0.1:{}", port)).unwrap();
+    let mut db =
+        mysql::Conn::new(mysql::Opts::from_url(&format!("mysql://127.0.0.1:{}", port)).unwrap())
+            .unwrap();
     assert_eq!(db.ping(), true);
     {
         let mut results = db
@@ -91,19 +90,19 @@ fn main() {
 
 // this is where the proxy server implementation starts
 
-struct Prepared<'a> {
-    stmt: postgres::stmt::Statement<'a>,
+struct Prepared {
+    stmt: postgres::Statement,
     params: Vec<Column>,
 }
 
 struct Postgres {
-    connection: postgres::Connection,
+    connection: postgres::Client,
     // NOTE: not *actually* static, but tied to our connection's lifetime.
-    prepared: Slab<Prepared<'static>>,
+    prepared: Slab<Prepared>,
 }
 
 impl Postgres {
-    fn new(c: postgres::Connection) -> Self {
+    fn new(c: postgres::Client) -> Self {
         Postgres {
             connection: c,
             prepared: Slab::new(),
@@ -112,7 +111,7 @@ impl Postgres {
 }
 
 impl<W: io::Write> MysqlShim<W> for Postgres {
-    type Error = postgres::Error;
+    type Error = anyhow::Error;
 
     fn on_prepare(&mut self, query: &str, info: StatementMetaWriter<W>) -> Result<(), Self::Error> {
         match self.connection.prepare(query) {
@@ -122,7 +121,7 @@ impl<W: io::Write> MysqlShim<W> for Postgres {
                 // client, which requires translating between psql and mysql types.
                 use std::mem;
                 let params: Vec<_> = stmt
-                    .param_types()
+                    .params()
                     .into_iter()
                     .map(|t| {
                         let ct = p2mt(t);
@@ -166,12 +165,12 @@ impl<W: io::Write> MysqlShim<W> for Postgres {
                 Ok(())
             }
             Err(e) => {
-                if let Some(db) = e.as_db() {
-                    info.error(ErrorKind::ER_NO, db.message.as_bytes())?;
+                if let Some(db) = e.as_db_error() {
+                    info.error(ErrorKind::ER_NO, db.message().as_bytes())?;
                     return Ok(());
                 }
 
-                Err(e)
+                Err(e.into())
             }
         }
     }
@@ -190,7 +189,7 @@ impl<W: io::Write> MysqlShim<W> for Postgres {
                 // we can only do that by first boxing all the values (so they can be kept in a
                 // single vec), and then collecting a *second* vec with references to those, and
                 // *then* take a slice of that vec.
-                let args: Vec<Box<dyn postgres::types::ToSql>> = ps
+                let args: Vec<Box<dyn postgres::types::ToSql + Sync>> = ps
                     .into_iter()
                     .map(|p| match p.coltype {
                         ColumnType::MYSQL_TYPE_SHORT => {
@@ -222,7 +221,7 @@ impl<W: io::Write> MysqlShim<W> for Postgres {
 
                 // lazy_query unfortunately gets us into all sorts of lifetime trouble it seems...
                 // so we do it eagerly instead.
-                answer_rows(results, stmt.query(&args[..]))
+                answer_rows(results, self.connection.query(stmt, &args[..]))
             }
         }
     }
@@ -247,24 +246,28 @@ impl Drop for Postgres {
 /// Take a set of rows from PostgreSQL and re-encode them as MySQL rows
 fn answer_rows<W: io::Write>(
     results: QueryResultWriter<W>,
-    rows: postgres::Result<postgres::rows::Rows>,
-) -> Result<(), postgres::Error> {
+    rows: Result<Vec<postgres::Row>, postgres::Error>,
+) -> Result<(), anyhow::Error> {
     match rows {
         Ok(rows) => {
-            let cols: Vec<_> = rows
-                .columns()
-                .into_iter()
-                .map(|c| {
-                    let t = c.type_();
-                    let ct = p2mt(t);
-                    Column {
-                        table: t.schema().to_owned(),
-                        column: c.name().to_owned(),
-                        coltype: ct,
-                        colflags: ColumnFlags::empty(),
-                    }
-                })
-                .collect();
+            let mut cols = vec![];
+            for row in &rows {
+                let col = &row
+                    .columns()
+                    .into_iter()
+                    .map(|c| {
+                        let t = c.type_();
+                        let ct = p2mt(t);
+                        Column {
+                            table: t.schema().to_owned(),
+                            column: c.name().to_owned(),
+                            coltype: ct,
+                            colflags: ColumnFlags::empty(),
+                        }
+                    })
+                    .collect::<Vec<Column>>()[0];
+                cols.push(col.clone());
+            }
 
             let mut writer = results.start(&cols)?;
             for row in &rows {
@@ -302,12 +305,12 @@ fn answer_rows<W: io::Write>(
 fn p2mt(t: &postgres::types::Type) -> msql_srv::ColumnType {
     if let postgres::types::Kind::Simple = *t.kind() {
         match postgres::types::Type::from_oid(t.oid()) {
-            Some(postgres::types::INT2) => msql_srv::ColumnType::MYSQL_TYPE_SHORT,
-            Some(postgres::types::INT4) => msql_srv::ColumnType::MYSQL_TYPE_LONG,
-            Some(postgres::types::INT8) => msql_srv::ColumnType::MYSQL_TYPE_LONGLONG,
-            Some(postgres::types::FLOAT4) => msql_srv::ColumnType::MYSQL_TYPE_FLOAT,
-            Some(postgres::types::FLOAT8) => msql_srv::ColumnType::MYSQL_TYPE_DOUBLE,
-            Some(postgres::types::TEXT) => msql_srv::ColumnType::MYSQL_TYPE_STRING,
+            Some(postgres::types::Type::INT2) => msql_srv::ColumnType::MYSQL_TYPE_SHORT,
+            Some(postgres::types::Type::INT4) => msql_srv::ColumnType::MYSQL_TYPE_LONG,
+            Some(postgres::types::Type::INT8) => msql_srv::ColumnType::MYSQL_TYPE_LONGLONG,
+            Some(postgres::types::Type::FLOAT4) => msql_srv::ColumnType::MYSQL_TYPE_FLOAT,
+            Some(postgres::types::Type::FLOAT8) => msql_srv::ColumnType::MYSQL_TYPE_DOUBLE,
+            Some(postgres::types::Type::TEXT) => msql_srv::ColumnType::MYSQL_TYPE_STRING,
             t => {
                 unimplemented!(
                     "don't know how to translate PostgreSQL type {:?} to a MySQL type",

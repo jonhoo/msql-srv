@@ -23,16 +23,17 @@ codecov = { repository = "jonhoo/msql-srv", branch = "master", service = "github
 maintenance = { status = "experimental" }
 
 [dependencies]
-nom = "5"
-mysql_common = "0.22"
-byteorder = "1"
+nom = "7.0.0-alpha1"
+mysql_common = "0.27"
+byteorder = "1.4"
 chrono = "0.4"
-time = "0.2.25"
 
 [dev-dependencies]
-postgres = "0.15"
-mysql = "18"
+anyhow = "1"
+postgres = "0.19"
+mysql = "21"
 mysql_async = "0.20.0"
-slab = "0.4.2"
-tokio = "0.1.19"
+slab = "0.4.3"
+tokio = { version = "1.0", features = ["full"] }
 futures = "0.1.26"
+bytes = "1"
