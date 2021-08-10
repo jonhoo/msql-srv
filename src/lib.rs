@@ -22,25 +22,25 @@
 //! use mysql::prelude::*;
 //!
 //! struct Backend;
-//! impl<W: io::Write> MysqlShim<W> for Backend {
+//! impl MysqlShim for Backend {
 //!     type Error = io::Error;
 //!
-//!     fn on_prepare(&mut self, _: &str, info: StatementMetaWriter<W>) -> io::Result<()> {
+//!     fn on_prepare(&mut self, _: &str, info: StatementMetaWriter) -> io::Result<()> {
 //!         info.reply(42, &[], &[])
 //!     }
 //!     fn on_execute(
 //!         &mut self,
 //!         _: u32,
 //!         _: ParamParser,
-//!         results: QueryResultWriter<W>,
+//!         results: QueryResultWriter,
 //!     ) -> io::Result<()> {
 //!         results.completed(0, 0)
 //!     }
 //!     fn on_close(&mut self, _: u32) {}
 //!
-//!     fn on_init(&mut self, _: &str, writer: InitWriter<W>) -> io::Result<()> { Ok(()) }
+//!     fn on_init(&mut self, _: &str, writer: InitWriter) -> io::Result<()> { Ok(()) }
 //!
-//!     fn on_query(&mut self, _: &str, results: QueryResultWriter<W>) -> io::Result<()> {
+//!     fn on_query(&mut self, _: &str, results: QueryResultWriter) -> io::Result<()> {
 //!         let cols = [
 //!             Column {
 //!                 table: "foo".to_string(),
@@ -137,7 +137,7 @@ pub use crate::resultset::{InitWriter, QueryResultWriter, RowWriter, StatementMe
 pub use crate::value::{ToMysqlValue, Value, ValueInner};
 
 /// Implementors of this trait can be used to drive a MySQL-compatible database backend.
-pub trait MysqlShim<W: Write> {
+pub trait MysqlShim {
     /// The error type produced by operations on this shim.
     ///
     /// Must implement `From<io::Error>` so that transport-level errors can be lifted.
@@ -148,11 +148,8 @@ pub trait MysqlShim<W: Write> {
     /// The provided [`StatementMetaWriter`](struct.StatementMetaWriter.html) should be used to
     /// notify the client of the statement id assigned to the prepared statement, as well as to
     /// give metadata about the types of parameters and returned columns.
-    fn on_prepare(
-        &mut self,
-        query: &str,
-        info: StatementMetaWriter<'_, W>,
-    ) -> Result<(), Self::Error>;
+    fn on_prepare(&mut self, query: &str, info: StatementMetaWriter<'_>)
+        -> Result<(), Self::Error>;
 
     /// Called when the client executes a previously prepared statement.
     ///
@@ -163,7 +160,7 @@ pub trait MysqlShim<W: Write> {
         &mut self,
         id: u32,
         params: ParamParser<'_>,
-        results: QueryResultWriter<'_, W>,
+        results: QueryResultWriter<'_>,
     ) -> Result<(), Self::Error>;
 
     /// Called when the client wishes to deallocate resources associated with a previously prepared
@@ -174,27 +171,23 @@ pub trait MysqlShim<W: Write> {
     ///
     /// Results should be returned using the given
     /// [`QueryResultWriter`](struct.QueryResultWriter.html).
-    fn on_query(
-        &mut self,
-        query: &str,
-        results: QueryResultWriter<'_, W>,
-    ) -> Result<(), Self::Error>;
+    fn on_query(&mut self, query: &str, results: QueryResultWriter<'_>) -> Result<(), Self::Error>;
 
     /// Called when client switches database.
-    fn on_init(&mut self, _: &str, _: InitWriter<'_, W>) -> Result<(), Self::Error> {
+    fn on_init(&mut self, _: &str, _: InitWriter<'_>) -> Result<(), Self::Error> {
         Ok(())
     }
 }
 
 /// A server that speaks the MySQL/MariaDB protocol, and can delegate client commands to a backend
 /// that implements [`MysqlShim`](trait.MysqlShim.html).
-pub struct MysqlIntermediary<B, R: Read, W: Write> {
+pub struct MysqlIntermediary<B> {
     shim: B,
-    reader: packet::PacketReader<R>,
-    writer: packet::PacketWriter<W>,
+    reader: packet::PacketReader,
+    writer: packet::PacketWriter,
 }
 
-impl<B: MysqlShim<net::TcpStream>> MysqlIntermediary<B, net::TcpStream, net::TcpStream> {
+impl<B: MysqlShim> MysqlIntermediary<B> {
     /// Create a new server over a TCP stream and process client commands until the client
     /// disconnects or an error occurs. See also
     /// [`MysqlIntermediary::run_on`](struct.MysqlIntermediary.html#method.run_on).
@@ -204,11 +197,14 @@ impl<B: MysqlShim<net::TcpStream>> MysqlIntermediary<B, net::TcpStream, net::Tcp
     }
 }
 
-impl<B: MysqlShim<S>, S: Read + Write + Clone> MysqlIntermediary<B, S, S> {
+impl<B: MysqlShim> MysqlIntermediary<B> {
     /// Create a new server over a two-way stream and process client commands until the client
     /// disconnects or an error occurs. See also
     /// [`MysqlIntermediary::run_on`](struct.MysqlIntermediary.html#method.run_on).
-    pub fn run_on_stream(shim: B, stream: S) -> Result<(), B::Error> {
+    pub fn run_on_stream<S: Read + Write + Clone + 'static>(
+        shim: B,
+        stream: S,
+    ) -> Result<(), B::Error> {
         MysqlIntermediary::run_on(shim, stream.clone(), stream)
     }
 }
@@ -220,10 +216,14 @@ struct StatementData {
     params: u16,
 }
 
-impl<B: MysqlShim<W>, R: Read, W: Write> MysqlIntermediary<B, R, W> {
+impl<B: MysqlShim> MysqlIntermediary<B> {
     /// Create a new server over two one-way channels and process client commands until the client
     /// disconnects or an error occurs.
-    pub fn run_on(shim: B, reader: R, writer: W) -> Result<(), B::Error> {
+    pub fn run_on<W: Write + 'static, R: Read + 'static>(
+        shim: B,
+        reader: R,
+        writer: W,
+    ) -> Result<(), B::Error> {
         let r = packet::PacketReader::new(reader);
         let w = packet::PacketWriter::new(writer);
         let mut mi = MysqlIntermediary {

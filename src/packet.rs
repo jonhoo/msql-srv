@@ -4,13 +4,13 @@ use std::io::prelude::*;
 
 const U24_MAX: usize = 16_777_215;
 
-pub struct PacketWriter<W> {
+pub struct PacketWriter {
     to_write: Vec<u8>,
     seq: u8,
-    w: W,
+    w: Box<dyn Write>,
 }
 
-impl<W: Write> Write for PacketWriter<W> {
+impl Write for PacketWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         use std::cmp::min;
         let left = min(buf.len(), U24_MAX - self.to_write.len());
@@ -28,12 +28,12 @@ impl<W: Write> Write for PacketWriter<W> {
     }
 }
 
-impl<W: Write> PacketWriter<W> {
-    pub fn new(w: W) -> Self {
+impl PacketWriter {
+    pub fn new<W: Write + 'static>(w: W) -> Self {
         PacketWriter {
             to_write: vec![0, 0, 0, 0],
             seq: 0,
-            w,
+            w: Box::new(w),
         }
     }
 
@@ -55,31 +55,31 @@ impl<W: Write> PacketWriter<W> {
     }
 }
 
-impl<W> PacketWriter<W> {
+impl PacketWriter {
     pub fn set_seq(&mut self, seq: u8) {
         self.seq = seq;
     }
 }
 
-pub struct PacketReader<R> {
+pub struct PacketReader {
     bytes: Vec<u8>,
     start: usize,
     remaining: usize,
-    r: R,
+    r: Box<dyn Read>,
 }
 
-impl<R> PacketReader<R> {
-    pub fn new(r: R) -> Self {
+impl PacketReader {
+    pub fn new<R: Read + 'static>(r: R) -> Self {
         PacketReader {
             bytes: Vec::new(),
             start: 0,
             remaining: 0,
-            r,
+            r: Box::new(r),
         }
     }
 }
 
-impl<R: Read> PacketReader<R> {
+impl PacketReader {
     pub fn next(&mut self) -> io::Result<Option<(u8, Packet<'_>)>> {
         self.start = self.bytes.len() - self.remaining;
 

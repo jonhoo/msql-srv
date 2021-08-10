@@ -5,17 +5,14 @@ use crate::{Column, ErrorKind};
 use byteorder::{LittleEndian, WriteBytesExt};
 use std::io::{self, Write};
 
-pub(crate) fn write_eof_packet<W: Write>(
-    w: &mut PacketWriter<W>,
-    s: StatusFlags,
-) -> io::Result<()> {
+pub(crate) fn write_eof_packet(w: &mut PacketWriter, s: StatusFlags) -> io::Result<()> {
     w.write_all(&[0xFE, 0x00, 0x00])?;
     w.write_u16::<LittleEndian>(s.bits())?;
     w.end_packet()
 }
 
-pub(crate) fn write_ok_packet<W: Write>(
-    w: &mut PacketWriter<W>,
+pub(crate) fn write_ok_packet(
+    w: &mut PacketWriter,
     rows: u64,
     last_insert_id: u64,
     s: StatusFlags,
@@ -28,7 +25,7 @@ pub(crate) fn write_ok_packet<W: Write>(
     w.end_packet()
 }
 
-pub fn write_err<W: Write>(err: ErrorKind, msg: &[u8], w: &mut PacketWriter<W>) -> io::Result<()> {
+pub fn write_err(err: ErrorKind, msg: &[u8], w: &mut PacketWriter) -> io::Result<()> {
     w.write_u8(0xFF)?;
     w.write_u16::<LittleEndian>(err as u16)?;
     w.write_u8(b'#')?;
@@ -39,18 +36,17 @@ pub fn write_err<W: Write>(err: ErrorKind, msg: &[u8], w: &mut PacketWriter<W>) 
 
 use std::borrow::Borrow;
 
-pub(crate) fn write_prepare_ok<'a, PI, CI, W>(
+pub(crate) fn write_prepare_ok<'a, PI, CI>(
     id: u32,
     params: PI,
     columns: CI,
-    w: &mut PacketWriter<W>,
+    w: &mut PacketWriter,
 ) -> io::Result<()>
 where
     PI: IntoIterator<Item = &'a Column>,
     CI: IntoIterator<Item = &'a Column>,
     <PI as IntoIterator>::IntoIter: ExactSizeIterator,
     <CI as IntoIterator>::IntoIter: ExactSizeIterator,
-    W: Write,
 {
     let pi = params.into_iter();
     let ci = columns.into_iter();
@@ -68,15 +64,14 @@ where
     write_column_definitions(ci, w, false, true)
 }
 
-pub(crate) fn write_column_definitions<'a, I, W>(
+pub(crate) fn write_column_definitions<'a, I>(
     i: I,
-    w: &mut PacketWriter<W>,
+    w: &mut PacketWriter,
     is_comm_field_list_response: bool,
     only_eof_on_nonempty: bool,
 ) -> io::Result<()>
 where
     I: IntoIterator<Item = &'a Column>,
-    W: Write,
 {
     let mut empty = true;
     for c in i {
@@ -114,11 +109,10 @@ where
     }
 }
 
-pub(crate) fn column_definitions<'a, I, W>(i: I, w: &mut PacketWriter<W>) -> io::Result<()>
+pub(crate) fn column_definitions<'a, I>(i: I, w: &mut PacketWriter) -> io::Result<()>
 where
     I: IntoIterator<Item = &'a Column>,
     <I as IntoIterator>::IntoIter: ExactSizeIterator,
-    W: Write,
 {
     let i = i.into_iter();
     w.write_lenenc_int(i.len() as u64)?;

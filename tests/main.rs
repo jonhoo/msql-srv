@@ -23,20 +23,16 @@ struct TestingShim<Q, P, E, I> {
     on_i: I,
 }
 
-impl<Q, P, E, I> MysqlShim<net::TcpStream> for TestingShim<Q, P, E, I>
+impl<Q, P, E, I> MysqlShim for TestingShim<Q, P, E, I>
 where
-    Q: FnMut(&str, QueryResultWriter<net::TcpStream>) -> io::Result<()>,
+    Q: FnMut(&str, QueryResultWriter) -> io::Result<()>,
     P: FnMut(&str) -> u32,
-    E: FnMut(u32, Vec<msql_srv::ParamValue>, QueryResultWriter<net::TcpStream>) -> io::Result<()>,
-    I: FnMut(&str, InitWriter<net::TcpStream>) -> io::Result<()>,
+    E: FnMut(u32, Vec<msql_srv::ParamValue>, QueryResultWriter) -> io::Result<()>,
+    I: FnMut(&str, InitWriter) -> io::Result<()>,
 {
     type Error = io::Error;
 
-    fn on_prepare(
-        &mut self,
-        query: &str,
-        info: StatementMetaWriter<net::TcpStream>,
-    ) -> io::Result<()> {
+    fn on_prepare(&mut self, query: &str, info: StatementMetaWriter) -> io::Result<()> {
         let id = (self.on_p)(query);
         info.reply(id, &self.params, &self.columns)
     }
@@ -45,34 +41,28 @@ where
         &mut self,
         id: u32,
         params: ParamParser,
-        results: QueryResultWriter<net::TcpStream>,
+        results: QueryResultWriter,
     ) -> io::Result<()> {
         (self.on_e)(id, params.into_iter().collect(), results)
     }
 
     fn on_close(&mut self, _: u32) {}
 
-    fn on_init(&mut self, schema: &str, writer: InitWriter<net::TcpStream>) -> io::Result<()> {
+    fn on_init(&mut self, schema: &str, writer: InitWriter) -> io::Result<()> {
         (self.on_i)(schema, writer)
     }
 
-    fn on_query(
-        &mut self,
-        query: &str,
-        results: QueryResultWriter<net::TcpStream>,
-    ) -> io::Result<()> {
+    fn on_query(&mut self, query: &str, results: QueryResultWriter) -> io::Result<()> {
         (self.on_q)(query, results)
     }
 }
 
 impl<Q, P, E, I> TestingShim<Q, P, E, I>
 where
-    Q: 'static + Send + FnMut(&str, QueryResultWriter<net::TcpStream>) -> io::Result<()>,
+    Q: 'static + Send + FnMut(&str, QueryResultWriter) -> io::Result<()>,
     P: 'static + Send + FnMut(&str) -> u32,
-    E: 'static
-        + Send
-        + FnMut(u32, Vec<msql_srv::ParamValue>, QueryResultWriter<net::TcpStream>) -> io::Result<()>,
-    I: 'static + Send + FnMut(&str, InitWriter<net::TcpStream>) -> io::Result<()>,
+    E: 'static + Send + FnMut(u32, Vec<msql_srv::ParamValue>, QueryResultWriter) -> io::Result<()>,
+    I: 'static + Send + FnMut(&str, InitWriter) -> io::Result<()>,
 {
     fn new(on_q: Q, on_p: P, on_e: E, on_i: I) -> Self {
         TestingShim {
