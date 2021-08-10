@@ -52,6 +52,7 @@ where
     fn on_query(&mut self, query: &str, results: QueryResultWriter) -> io::Result<()> {
         (self.on_q)(query, results)
     }
+
 }
 
 impl<Q, P, E> TestingShim<Q, P, E>

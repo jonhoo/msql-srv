@@ -101,6 +101,8 @@ use std::io::prelude::*;
 use std::iter;
 use std::net;
 
+use myc::constants::CapabilityFlags;
+
 pub use crate::myc::constants::{ColumnFlags, ColumnType, StatusFlags};
 
 mod commands;
@@ -108,6 +110,7 @@ mod errorcodes;
 mod packet;
 mod params;
 mod resultset;
+mod tls;
 mod value;
 mod writers;
 
@@ -134,6 +137,7 @@ pub struct Column {
 pub use crate::errorcodes::ErrorKind;
 pub use crate::params::{ParamParser, ParamValue, Params};
 pub use crate::resultset::{InitWriter, QueryResultWriter, RowWriter, StatementMetaWriter};
+pub use crate::tls::TlsConfig;
 pub use crate::value::{ToMysqlValue, Value, ValueInner};
 
 /// Implementors of this trait can be used to drive a MySQL-compatible database backend.
@@ -176,6 +180,11 @@ pub trait MysqlShim {
     /// Called when client switches database.
     fn on_init(&mut self, _: &str, _: InitWriter<'_>) -> Result<(), Self::Error> {
         Ok(())
+    }
+
+    /// Provides the TLS configuration, if we want to support TLS.
+    fn tls_config(&self) -> Option<&TlsConfig> {
+        None
     }
 }
 
@@ -231,11 +240,11 @@ impl<B: MysqlShim> MysqlIntermediary<B> {
             reader: r,
             writer: w,
         };
-        mi.init()?;
+        mi = mi.init()?;
         mi.run()
     }
 
-    fn init(&mut self) -> Result<(), B::Error> {
+    fn init(mut self) -> Result<Self, B::Error> {
         self.writer.write_all(&[10])?; // protocol 10
 
         // 5.1.10 because that's what Ruby's ActiveRecord requires
@@ -243,7 +252,11 @@ impl<B: MysqlShim> MysqlIntermediary<B> {
 
         self.writer.write_all(&[0x08, 0x00, 0x00, 0x00])?; // TODO: connection ID
         self.writer.write_all(&b";X,po_k}\0"[..])?; // auth seed
-        self.writer.write_all(&[0x00, 0x42])?; // just 4.1 proto
+        let capabilities = &mut [0x00, 0x4A];// 4.1 proto
+        if self.shim.tls_config().is_some() {
+            capabilities[1] = 0x08; // SSL support flag
+        }
+        self.writer.write_all(capabilities)?;
         self.writer.write_all(&[0x21])?; // UTF8_GENERAL_CI
         self.writer.write_all(&[0x00, 0x00])?; // status flags
         self.writer.write_all(&[0x00, 0x00])?; // extended capabilities
@@ -260,7 +273,7 @@ impl<B: MysqlShim> MysqlIntermediary<B> {
                     "peer terminated connection",
                 )
             })?;
-            let _handshake = commands::client_handshake(&handshake)
+            let handshake = commands::client_handshake(&handshake)
                 .map_err(|e| match e {
                     nom::Err::Incomplete(_) => io::Error::new(
                         io::ErrorKind::UnexpectedEof,
@@ -282,13 +295,66 @@ impl<B: MysqlShim> MysqlIntermediary<B> {
                     }
                 })?
                 .1;
+
             self.writer.set_seq(seq + 1);
+
+            if handshake.capabilities.contains(CapabilityFlags::CLIENT_SSL) {
+
+                let config = self.shim.tls_config().ok_or_else(||io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "client requested SSL despite us not advertising support for it",
+                ))?;
+
+                assert!(self.reader.remaining() == 0); // otherwise we've read ahead into the TLS handshake and will be in trouble.
+
+                let rw = readwrite::ReadWrite::new(self.reader.r, self.writer.w);
+
+                let stream1 = tls::create_stream(rw, &config);
+                let stream2 = stream1.clone();
+
+                self.reader.r = Box::new(stream1);
+                self.writer.w = Box::new(stream2);
+
+                let (seq, handshake) = self.reader.next()?.ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::ConnectionAborted,
+                        "peer terminated connection",
+                    )
+                })?;
+                let _handshake = commands::client_handshake(&handshake)
+                    .map_err(|e| match e {
+                        nom::Err::Incomplete(_) => io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            "client sent incomplete handshake",
+                        ),
+                        nom::Err::Failure((input, nom_e_kind))
+                        | nom::Err::Error((input, nom_e_kind)) => {
+                            if let nom::error::ErrorKind::Eof = nom_e_kind {
+                                io::Error::new(
+                                    io::ErrorKind::UnexpectedEof,
+                                    format!("client did not complete handshake; got {:?}", input),
+                                )
+                            } else {
+                                io::Error::new(
+                                    io::ErrorKind::InvalidData,
+                                    format!(
+                                        "bad client handshake; got {:?} ({:?})",
+                                        input, nom_e_kind
+                                    ),
+                                )
+                            }
+                        }
+                    })?
+                    .1;
+
+                self.writer.set_seq(seq + 1);
+            }
         }
 
         writers::write_ok_packet(&mut self.writer, 0, 0, StatusFlags::empty())?;
         self.writer.flush()?;
 
-        Ok(())
+        Ok(self)
     }
 
     fn run(mut self) -> Result<(), B::Error> {

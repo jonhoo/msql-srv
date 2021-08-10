@@ -2,10 +2,10 @@ use crate::myc::constants::{CapabilityFlags, Command as CommandByte};
 
 #[derive(Debug)]
 pub struct ClientHandshake<'a> {
-    capabilities: CapabilityFlags,
+    pub capabilities: CapabilityFlags,
     maxps: u32,
     collation: u16,
-    username: &'a [u8],
+    username: Option<&'a [u8]>,
 }
 
 pub fn client_handshake(i: &[u8]) -> nom::IResult<&[u8], ClientHandshake<'_>> {
@@ -20,16 +20,24 @@ pub fn client_handshake(i: &[u8]) -> nom::IResult<&[u8], ClientHandshake<'_>> {
         let (i, cap2) = nom::number::complete::le_u16(i)?;
         let cap = (cap2 as u32) << 16 | cap as u32;
 
+        let capabilities = CapabilityFlags::from_bits_truncate(cap);
+
         let (i, maxps) = nom::number::complete::le_u32(i)?;
         let (i, collation) = nom::bytes::complete::take(1u8)(i)?;
         let (i, _) = nom::bytes::complete::take(23u8)(i)?;
-        let (i, username) = nom::bytes::complete::take_until(&b"\0"[..])(i)?;
-        let (i, _) = nom::bytes::complete::tag(b"\0")(i)?;
+
+        let (i, username) = if !capabilities.contains(CapabilityFlags::CLIENT_SSL) {
+            let (i, user) = nom::bytes::complete::take_until(&b"\0"[..])(i)?;
+            let (i, _) = nom::bytes::complete::tag(b"\0")(i)?;
+            (i, Some(user))
+        } else {
+            (i, None)
+        };
 
         Ok((
             i,
             ClientHandshake {
-                capabilities: CapabilityFlags::from_bits_truncate(cap),
+                capabilities,
                 maxps,
                 collation: u16::from(collation[0]),
                 username,
@@ -48,7 +56,7 @@ pub fn client_handshake(i: &[u8]) -> nom::IResult<&[u8], ClientHandshake<'_>> {
                 capabilities: CapabilityFlags::from_bits_truncate(cap as u32),
                 maxps,
                 collation: 0,
-                username,
+                username: Some(username),
             },
         ))
     }
@@ -164,7 +172,7 @@ mod tests {
             .capabilities
             .contains(CapabilityFlags::CLIENT_DEPRECATE_EOF));
         assert_eq!(handshake.collation, UTF8_GENERAL_CI);
-        assert_eq!(handshake.username, &b"jon"[..]);
+        assert_eq!(handshake.username.unwrap(), &b"jon"[..]);
         assert_eq!(handshake.maxps, 16777216);
     }
 
