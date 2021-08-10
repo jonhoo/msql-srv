@@ -3,9 +3,9 @@ use crate::myc::io::WriteMysqlExt;
 use crate::packet::PacketConn;
 use crate::{Column, ErrorKind};
 use byteorder::{LittleEndian, WriteBytesExt};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 
-pub(crate) fn write_eof_packet<W: Write>(
+pub(crate) fn write_eof_packet<W: Read + Write>(
     w: &mut PacketConn<W>,
     s: StatusFlags,
 ) -> io::Result<()> {
@@ -14,7 +14,7 @@ pub(crate) fn write_eof_packet<W: Write>(
     w.end_packet()
 }
 
-pub(crate) fn write_ok_packet<W: Write>(
+pub(crate) fn write_ok_packet<W: Read + Write>(
     w: &mut PacketConn<W>,
     rows: u64,
     last_insert_id: u64,
@@ -28,7 +28,7 @@ pub(crate) fn write_ok_packet<W: Write>(
     w.end_packet()
 }
 
-pub fn write_err<W: Write>(
+pub fn write_err<W: Read + Write>(
     err: ErrorKind,
     msg: &[u8],
     w: &mut PacketConn<W>,
@@ -43,7 +43,7 @@ pub fn write_err<W: Write>(
 
 use std::borrow::Borrow;
 
-pub(crate) fn write_prepare_ok<'a, PI, CI, W>(
+pub(crate) fn write_prepare_ok<'a, PI, CI, W: Read + Write>(
     id: u32,
     params: PI,
     columns: CI,
@@ -72,7 +72,7 @@ where
     write_column_definitions(ci, w, false, true)
 }
 
-pub(crate) fn write_column_definitions<'a, I, W>(
+pub(crate) fn write_column_definitions<'a, I, W: Read + Write>(
     i: I,
     w: &mut PacketConn<W>,
     is_comm_field_list_response: bool,
@@ -118,7 +118,10 @@ where
     }
 }
 
-pub(crate) fn column_definitions<'a, I, W>(i: I, w: &mut PacketConn<W>) -> io::Result<()>
+pub(crate) fn column_definitions<'a, I, W: Read + Write>(
+    i: I,
+    w: &mut PacketConn<W>,
+) -> io::Result<()>
 where
     I: IntoIterator<Item = &'a Column>,
     <I as IntoIterator>::IntoIter: ExactSizeIterator,

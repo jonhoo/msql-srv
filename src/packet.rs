@@ -1,11 +1,12 @@
 use byteorder::{ByteOrder, LittleEndian};
+use rustls::ServerConnection;
 use std::io;
 use std::io::prelude::*;
 
 const U24_MAX: usize = 16_777_215;
 
-pub struct PacketConn<RW> {
-    rw: RW,
+pub struct PacketConn<RW: Read + Write> {
+    rw: SwitchableConn<RW>,
 
     // read variables
     bytes: Vec<u8>,
@@ -17,7 +18,7 @@ pub struct PacketConn<RW> {
     seq: u8,
 }
 
-impl<W: Write> Write for PacketConn<W> {
+impl<W: Read + Write> Write for PacketConn<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         use std::cmp::min;
         let left = min(buf.len(), U24_MAX - self.to_write.len());
@@ -44,12 +45,12 @@ impl<RW: Read + Write> PacketConn<RW> {
 
             to_write: vec![0, 0, 0, 0],
             seq: 0,
-            rw,
+            rw: SwitchableConn::new(rw),
         }
     }
 }
 
-impl<W: Write> PacketConn<W> {
+impl<W: Read + Write> PacketConn<W> {
     fn maybe_end_packet(&mut self) -> io::Result<()> {
         let len = self.to_write.len() - 4;
         if len != 0 {
@@ -66,15 +67,21 @@ impl<W: Write> PacketConn<W> {
     pub fn end_packet(&mut self) -> io::Result<()> {
         self.maybe_end_packet()
     }
+
+    pub fn switch_to_tls(&mut self, config: &TlsConfig) -> io::Result<()> {
+        assert!(self.remaining() == 0); // otherwise we've read ahead into the TLS handshake and will be in trouble.
+
+        self.rw.switch_to_tls(config)
+    }
 }
 
-impl<W> PacketConn<W> {
+impl<W: Read + Write> PacketConn<W> {
     pub fn set_seq(&mut self, seq: u8) {
         self.seq = seq;
     }
 }
 
-impl<R: Read> PacketConn<R> {
+impl<R: Read + Write> PacketConn<R> {
     pub fn next(&mut self) -> io::Result<Option<(u8, Packet)>> {
         self.start = self.bytes.len() - self.remaining;
 
@@ -127,6 +134,10 @@ impl<R: Read> PacketConn<R> {
             }
         }
     }
+
+    pub fn remaining(&self) -> usize {
+        self.remaining
+    }
 }
 
 pub fn fullpacket(i: &[u8]) -> nom::IResult<&[u8], (u8, &[u8])> {
@@ -160,6 +171,9 @@ impl AsRef<[u8]> for Packet {
 }
 
 use std::ops::Deref;
+
+use crate::tls::TlsStream;
+use crate::{tls, TlsConfig};
 impl Deref for Packet {
     type Target = [u8];
     fn deref(&self) -> &Self::Target {
@@ -198,6 +212,60 @@ fn packet(i: &[u8]) -> nom::IResult<&[u8], (u8, Packet)> {
             (seq, pkt)
         },
     )(i)
+}
+
+pub struct SwitchableConn<T: Read + Write>(Option<EitherConn<T>>);
+
+pub enum EitherConn<T: Read + Write> {
+    Plain(T),
+    TLS(TlsStream<ServerConnection, T>),
+}
+
+impl<T: Read + Write> Read for SwitchableConn<T> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match &mut self.0.as_mut().unwrap() {
+            EitherConn::Plain(p) => p.read(buf),
+            EitherConn::TLS(t) => t.read(buf),
+        }
+    }
+}
+
+impl<T: Read + Write> Write for SwitchableConn<T> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match &mut self.0.as_mut().unwrap() {
+            EitherConn::Plain(p) => p.write(buf),
+            EitherConn::TLS(t) => t.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match &mut self.0.as_mut().unwrap() {
+            EitherConn::Plain(p) => p.flush(),
+            EitherConn::TLS(t) => t.flush(),
+        }
+    }
+}
+
+impl<T: Read + Write> SwitchableConn<T> {
+    pub fn new(rw: T) -> SwitchableConn<T> {
+        SwitchableConn(Some(EitherConn::Plain(rw)))
+    }
+
+    pub fn switch_to_tls(&mut self, config: &TlsConfig) -> io::Result<()> {
+        let replacement = match self.0.take() {
+            Some(EitherConn::Plain(plain)) => {
+                Ok(EitherConn::TLS(tls::create_stream(plain, &config)?))
+            }
+            Some(EitherConn::TLS(_)) => Err(io::Error::new(
+                io::ErrorKind::Other,
+                "tls variant found when plain was expected",
+            )),
+            None => unreachable!(),
+        }?;
+
+        self.0 = Some(replacement);
+        Ok(())
+    }
 }
 
 #[cfg(test)]

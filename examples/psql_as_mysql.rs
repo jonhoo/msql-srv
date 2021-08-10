@@ -127,7 +127,7 @@ impl From<postgres::Error> for Error {
     }
 }
 
-impl<W: io::Write> MysqlShim<W> for Postgres {
+impl<W: io::Read + io::Write> MysqlShim<W> for Postgres {
     type Error = Error;
 
     fn on_prepare(&mut self, query: &str, info: StatementMetaWriter<W>) -> Result<(), Self::Error> {
@@ -262,7 +262,7 @@ impl Drop for Postgres {
 }
 
 /// Take a set of rows from PostgreSQL and re-encode them as MySQL rows
-fn answer_rows<W: io::Write>(
+fn answer_rows<W: io::Read + io::Write>(
     results: QueryResultWriter<W>,
     rows: Result<Vec<postgres::Row>, postgres::Error>,
 ) -> Result<(), Error> {
