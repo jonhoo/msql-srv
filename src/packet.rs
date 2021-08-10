@@ -5,9 +5,9 @@ use std::io::prelude::*;
 const U24_MAX: usize = 16_777_215;
 
 pub struct PacketWriter {
-    to_write: Vec<u8>,
+    pub(crate) to_write: Vec<u8>,
     seq: u8,
-    w: Box<dyn Write>,
+    pub(crate) w: Box<dyn Write>,
 }
 
 impl Write for PacketWriter {
@@ -65,7 +65,7 @@ pub struct PacketReader {
     bytes: Vec<u8>,
     start: usize,
     remaining: usize,
-    r: Box<dyn Read>,
+    pub(crate) r: Box<dyn Read>,
 }
 
 impl PacketReader {
@@ -131,6 +131,10 @@ impl PacketReader {
                 }
             }
         }
+    }
+
+    pub fn remaining(&self) -> usize {
+        self.remaining
     }
 }
 
