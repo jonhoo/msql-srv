@@ -127,10 +127,10 @@ impl From<postgres::Error> for Error {
     }
 }
 
-impl<W: io::Write> MysqlShim<W> for Postgres {
+impl MysqlShim for Postgres {
     type Error = Error;
 
-    fn on_prepare(&mut self, query: &str, info: StatementMetaWriter<W>) -> Result<(), Self::Error> {
+    fn on_prepare(&mut self, query: &str, info: StatementMetaWriter) -> Result<(), Self::Error> {
         match self.connection.prepare(query) {
             Ok(stmt) => {
                 // the PostgreSQL server will tell us about the parameter types and output columns
@@ -197,7 +197,7 @@ impl<W: io::Write> MysqlShim<W> for Postgres {
         &mut self,
         id: u32,
         ps: ParamParser,
-        results: QueryResultWriter<W>,
+        results: QueryResultWriter,
     ) -> Result<(), Self::Error> {
         match self.prepared.get_mut(id as usize) {
             None => Ok(results.error(ErrorKind::ER_NO, b"no such prepared statement")?),
@@ -248,7 +248,7 @@ impl<W: io::Write> MysqlShim<W> for Postgres {
         self.prepared.remove(id as usize);
     }
 
-    fn on_query(&mut self, query: &str, results: QueryResultWriter<W>) -> Result<(), Self::Error> {
+    fn on_query(&mut self, query: &str, results: QueryResultWriter) -> Result<(), Self::Error> {
         answer_rows(results, self.connection.query(query, &[]))
     }
 }
@@ -262,8 +262,8 @@ impl Drop for Postgres {
 }
 
 /// Take a set of rows from PostgreSQL and re-encode them as MySQL rows
-fn answer_rows<W: io::Write>(
-    results: QueryResultWriter<W>,
+fn answer_rows(
+    results: QueryResultWriter,
     rows: Result<Vec<postgres::Row>, postgres::Error>,
 ) -> Result<(), Error> {
     match rows {

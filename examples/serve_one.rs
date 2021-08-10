@@ -14,23 +14,23 @@ use std::net;
 use std::thread;
 
 struct Backend;
-impl<W: io::Write> MysqlShim<W> for Backend {
+impl MysqlShim for Backend {
     type Error = io::Error;
 
-    fn on_prepare(&mut self, _: &str, info: StatementMetaWriter<W>) -> io::Result<()> {
+    fn on_prepare(&mut self, _: &str, info: StatementMetaWriter) -> io::Result<()> {
         info.reply(42, &[], &[])
     }
     fn on_execute(
         &mut self,
         _: u32,
         _: msql_srv::ParamParser,
-        results: QueryResultWriter<W>,
+        results: QueryResultWriter,
     ) -> io::Result<()> {
         results.completed(0, 0)
     }
     fn on_close(&mut self, _: u32) {}
 
-    fn on_query(&mut self, _: &str, results: QueryResultWriter<W>) -> io::Result<()> {
+    fn on_query(&mut self, _: &str, results: QueryResultWriter) -> io::Result<()> {
         results.start(&[])?.finish()
     }
 }

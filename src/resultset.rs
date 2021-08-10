@@ -9,11 +9,11 @@ use std::collections::HashMap;
 use std::io::{self, Write};
 
 /// Convenience type for responding to a client `USE <db>` command.
-pub struct InitWriter<'a, W: Write> {
-    pub(crate) writer: &'a mut PacketWriter<W>,
+pub struct InitWriter<'a> {
+    pub(crate) writer: &'a mut PacketWriter,
 }
 
-impl<'a, W: Write + 'a> InitWriter<'a, W> {
+impl<'a> InitWriter<'a> {
     /// Tell client that database context has been changed
     pub fn ok(self) -> io::Result<()> {
         writers::write_ok_packet(self.writer, 0, 0, StatusFlags::empty())
@@ -37,12 +37,12 @@ impl<'a, W: Write + 'a> InitWriter<'a, W> {
 /// [`reply`](struct.StatementMetaWriter.html#method.reply) or
 /// [`error`](struct.StatementMetaWriter.html#method.error).
 #[must_use]
-pub struct StatementMetaWriter<'a, W: Write> {
-    pub(crate) writer: &'a mut PacketWriter<W>,
+pub struct StatementMetaWriter<'a> {
+    pub(crate) writer: &'a mut PacketWriter,
     pub(crate) stmts: &'a mut HashMap<u32, StatementData>,
 }
 
-impl<'a, W: Write + 'a> StatementMetaWriter<'a, W> {
+impl<'a> StatementMetaWriter<'a> {
     /// Reply to the client with the given meta-information.
     ///
     /// `id` is a statement identifier that the client should supply when it later wants to execute
@@ -100,15 +100,15 @@ enum Finalizer {
 /// program may panic if an I/O error occurs when sending the end-of-records marker to the client.
 /// To handle such errors, call `no_more_results` explicitly.
 #[must_use]
-pub struct QueryResultWriter<'a, W: Write> {
+pub struct QueryResultWriter<'a> {
     // XXX: specialization instead?
     pub(crate) is_bin: bool,
-    pub(crate) writer: &'a mut PacketWriter<W>,
+    pub(crate) writer: &'a mut PacketWriter,
     last_end: Option<Finalizer>,
 }
 
-impl<'a, W: Write> QueryResultWriter<'a, W> {
-    pub(crate) fn new(writer: &'a mut PacketWriter<W>, is_bin: bool) -> Self {
+impl<'a> QueryResultWriter<'a> {
+    pub(crate) fn new(writer: &'a mut PacketWriter, is_bin: bool) -> Self {
         QueryResultWriter {
             is_bin,
             writer,
@@ -136,7 +136,7 @@ impl<'a, W: Write> QueryResultWriter<'a, W> {
     /// Note that if no columns are emitted, any written rows are ignored.
     ///
     /// See [`RowWriter`](struct.RowWriter.html).
-    pub fn start(mut self, columns: &'a [Column]) -> io::Result<RowWriter<'a, W>> {
+    pub fn start(mut self, columns: &'a [Column]) -> io::Result<RowWriter<'a>> {
         self.finalize(true)?;
         RowWriter::new(self, columns)
     }
@@ -176,7 +176,7 @@ impl<'a, W: Write> QueryResultWriter<'a, W> {
     }
 }
 
-impl<'a, W: Write> Drop for QueryResultWriter<'a, W> {
+impl<'a> Drop for QueryResultWriter<'a> {
     fn drop(&mut self) {
         self.finalize(false).unwrap();
     }
@@ -195,8 +195,8 @@ impl<'a, W: Write> Drop for QueryResultWriter<'a, W> {
 /// if an I/O error occurs when sending the end-of-records marker to the client. To avoid this,
 /// call [`finish`](struct.RowWriter.html#method.finish) explicitly.
 #[must_use]
-pub struct RowWriter<'a, W: Write> {
-    result: Option<QueryResultWriter<'a, W>>,
+pub struct RowWriter<'a> {
+    result: Option<QueryResultWriter<'a>>,
     bitmap_len: usize,
     data: Vec<u8>,
     columns: &'a [Column],
@@ -208,14 +208,8 @@ pub struct RowWriter<'a, W: Write> {
     finished: bool,
 }
 
-impl<'a, W> RowWriter<'a, W>
-where
-    W: Write + 'a,
-{
-    fn new(
-        result: QueryResultWriter<'a, W>,
-        columns: &'a [Column],
-    ) -> io::Result<RowWriter<'a, W>> {
+impl<'a> RowWriter<'a> {
+    fn new(result: QueryResultWriter<'a>, columns: &'a [Column]) -> io::Result<RowWriter<'a>> {
         let bitmap_len = (columns.len() + 7 + 2) / 8;
         let mut rw = RowWriter {
             result: Some(result),
@@ -346,7 +340,7 @@ where
     }
 }
 
-impl<'a, W: Write + 'a> RowWriter<'a, W> {
+impl<'a> RowWriter<'a> {
     fn finish_inner(&mut self) -> io::Result<()> {
         if self.finished {
             return Ok(());
@@ -377,7 +371,7 @@ impl<'a, W: Write + 'a> RowWriter<'a, W> {
     }
 
     /// End this resultset response, and indicate to the client that no more rows are coming.
-    pub fn finish_one(mut self) -> io::Result<QueryResultWriter<'a, W>> {
+    pub fn finish_one(mut self) -> io::Result<QueryResultWriter<'a>> {
         self.finish_inner()?;
         // we know that dropping self will see self.finished == true,
         // and so Drop won't try to use self.result.
@@ -385,7 +379,7 @@ impl<'a, W: Write + 'a> RowWriter<'a, W> {
     }
 }
 
-impl<'a, W: Write + 'a> Drop for RowWriter<'a, W> {
+impl<'a> Drop for RowWriter<'a> {
     fn drop(&mut self) {
         self.finish_inner().unwrap();
     }
