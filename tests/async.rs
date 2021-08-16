@@ -4,7 +4,6 @@ extern crate msql_srv;
 extern crate mysql_async;
 extern crate mysql_common as myc;
 extern crate nom;
-extern crate tokio;
 
 use futures::{Future, IntoFuture};
 use mysql_async::prelude::*;
@@ -102,14 +101,10 @@ where
             MysqlIntermediary::run_on_tcp(self, s)
         });
 
-        // Create the runtime
-        let rt = tokio::runtime::Runtime::new().unwrap();
-
-        rt.spawn_blocking(move || {
-            mysql_async::Conn::new(format!("mysql://127.0.0.1:{}", port))
-                .and_then(|conn| c(conn))
-                .wait()
-        });
+        mysql_async::Conn::new(format!("mysql://127.0.0.1:{}", port))
+            .and_then(|conn| c(conn))
+            .wait()
+            .unwrap();
 
         jh.join().unwrap().unwrap();
     }
