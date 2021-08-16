@@ -30,7 +30,7 @@ chrono = "0.4"
 time = "0.2.25"
 
 [dev-dependencies]
-postgres = "0.15"
+postgres = "0.19.1"
 mysql = "18"
 mysql_async = "0.20.0"
 slab = "0.4.2"
