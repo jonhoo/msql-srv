@@ -80,7 +80,7 @@ impl<R> PacketReader<R> {
 }
 
 impl<R: Read> PacketReader<R> {
-    pub fn next(&mut self) -> io::Result<Option<(u8, Packet<'_>)>> {
+    pub fn next(&mut self) -> io::Result<Option<(u8, Packet)>> {
         self.start = self.bytes.len() - self.remaining;
 
         loop {
@@ -150,59 +150,41 @@ pub fn onepacket(i: &[u8]) -> nom::IResult<&[u8], (u8, &[u8])> {
 
 // Clone because of https://github.com/Geal/nom/issues/1008
 #[derive(Clone)]
-pub struct Packet<'a>(&'a [u8], Vec<u8>);
+pub struct Packet(Vec<u8>);
 
-impl<'a> Packet<'a> {
-    fn extend(&mut self, bytes: &'a [u8]) {
-        if self.0.is_empty() {
-            if self.1.is_empty() {
-                // first extend
-                self.0 = bytes;
-            } else {
-                // later extend
-                self.1.extend(bytes);
-            }
-        } else {
-            assert!(self.1.is_empty());
-            let mut v = self.0.to_vec();
-            v.extend(bytes);
-            self.1 = v;
-            self.0 = &[];
-        }
+impl Packet {
+    fn extend(&mut self, bytes: &[u8]) {
+        self.0.extend(bytes);
     }
 }
 
-impl<'a> AsRef<[u8]> for Packet<'a> {
+impl AsRef<[u8]> for Packet {
     fn as_ref(&self) -> &[u8] {
-        if self.1.is_empty() {
-            self.0
-        } else {
-            &*self.1
-        }
+        &self.0
     }
 }
 
 use std::ops::Deref;
-impl<'a> Deref for Packet<'a> {
+impl Deref for Packet {
     type Target = [u8];
     fn deref(&self) -> &Self::Target {
         self.as_ref()
     }
 }
 
-fn packet(i: &[u8]) -> nom::IResult<&[u8], (u8, Packet<'_>)> {
+fn packet(i: &[u8]) -> nom::IResult<&[u8], (u8, Packet)> {
     nom::combinator::map(
         nom::sequence::pair(
             nom::multi::fold_many0(
                 fullpacket,
                 (0, None),
-                |(seq, pkt): (_, Option<Packet<'_>>), (nseq, p)| {
+                |(seq, pkt): (_, Option<Packet>), (nseq, p)| {
                     let pkt = if let Some(mut pkt) = pkt {
                         assert_eq!(nseq, seq + 1);
                         pkt.extend(p);
                         Some(pkt)
                     } else {
-                        Some(Packet(p, Vec::new()))
+                        Some(Packet(Vec::from(p)))
                     };
                     (nseq, pkt)
                 },
@@ -216,7 +198,7 @@ fn packet(i: &[u8]) -> nom::IResult<&[u8], (u8, Packet<'_>)> {
                 pkt.extend(last.1);
                 pkt
             } else {
-                Packet(last.1, Vec::new())
+                Packet(Vec::from(last.1))
             };
             (seq, pkt)
         },
