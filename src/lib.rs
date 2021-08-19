@@ -188,28 +188,26 @@ pub trait MysqlShim<W: Write> {
 
 /// A server that speaks the MySQL/MariaDB protocol, and can delegate client commands to a backend
 /// that implements [`MysqlShim`](trait.MysqlShim.html).
-pub struct MysqlIntermediary<B, R: Read, W: Write> {
+pub struct MysqlIntermediary<B, RW: Read + Write> {
     shim: B,
-    reader: packet::PacketReader<R>,
-    writer: packet::PacketWriter<W>,
+    rw: packet::PacketConn<RW>,
 }
 
-impl<B: MysqlShim<net::TcpStream>> MysqlIntermediary<B, net::TcpStream, net::TcpStream> {
+impl<B: MysqlShim<net::TcpStream>> MysqlIntermediary<B, net::TcpStream> {
     /// Create a new server over a TCP stream and process client commands until the client
     /// disconnects or an error occurs. See also
     /// [`MysqlIntermediary::run_on`](struct.MysqlIntermediary.html#method.run_on).
     pub fn run_on_tcp(shim: B, stream: net::TcpStream) -> Result<(), B::Error> {
-        let w = stream.try_clone()?;
-        MysqlIntermediary::run_on(shim, stream, w)
+        MysqlIntermediary::run_on(shim, stream)
     }
 }
 
-impl<B: MysqlShim<S>, S: Read + Write + Clone> MysqlIntermediary<B, S, S> {
+impl<B: MysqlShim<S>, S: Read + Write + Clone> MysqlIntermediary<B, S> {
     /// Create a new server over a two-way stream and process client commands until the client
     /// disconnects or an error occurs. See also
     /// [`MysqlIntermediary::run_on`](struct.MysqlIntermediary.html#method.run_on).
     pub fn run_on_stream(shim: B, stream: S) -> Result<(), B::Error> {
-        MysqlIntermediary::run_on(shim, stream.clone(), stream)
+        MysqlIntermediary::run_on(shim, stream)
     }
 }
 
@@ -220,41 +218,36 @@ struct StatementData {
     params: u16,
 }
 
-impl<B: MysqlShim<W>, R: Read, W: Write> MysqlIntermediary<B, R, W> {
+impl<B: MysqlShim<RW>, RW: Read + Write> MysqlIntermediary<B, RW> {
     /// Create a new server over two one-way channels and process client commands until the client
     /// disconnects or an error occurs.
-    pub fn run_on(shim: B, reader: R, writer: W) -> Result<(), B::Error> {
-        let r = packet::PacketReader::new(reader);
-        let w = packet::PacketWriter::new(writer);
-        let mut mi = MysqlIntermediary {
-            shim,
-            reader: r,
-            writer: w,
-        };
+    pub fn run_on(shim: B, rw: RW) -> Result<(), B::Error> {
+        let rw = packet::PacketConn::new(rw);
+        let mut mi = MysqlIntermediary { shim, rw };
         mi.init()?;
         mi.run()
     }
 
     fn init(&mut self) -> Result<(), B::Error> {
-        self.writer.write_all(&[10])?; // protocol 10
+        self.rw.write_all(&[10])?; // protocol 10
 
         // 5.1.10 because that's what Ruby's ActiveRecord requires
-        self.writer.write_all(&b"5.1.10-alpha-msql-proxy\0"[..])?;
+        self.rw.write_all(&b"5.1.10-alpha-msql-proxy\0"[..])?;
 
-        self.writer.write_all(&[0x08, 0x00, 0x00, 0x00])?; // TODO: connection ID
-        self.writer.write_all(&b";X,po_k}\0"[..])?; // auth seed
-        self.writer.write_all(&[0x00, 0x42])?; // just 4.1 proto
-        self.writer.write_all(&[0x21])?; // UTF8_GENERAL_CI
-        self.writer.write_all(&[0x00, 0x00])?; // status flags
-        self.writer.write_all(&[0x00, 0x00])?; // extended capabilities
-        self.writer.write_all(&[0x00])?; // no plugins
-        self.writer.write_all(&[0x00; 6][..])?; // filler
-        self.writer.write_all(&[0x00; 4][..])?; // filler
-        self.writer.write_all(&b">o6^Wz!/kM}N\0"[..])?; // 4.1+ servers must extend salt
-        self.writer.flush()?;
+        self.rw.write_all(&[0x08, 0x00, 0x00, 0x00])?; // TODO: connection ID
+        self.rw.write_all(&b";X,po_k}\0"[..])?; // auth seed
+        self.rw.write_all(&[0x00, 0x42])?; // just 4.1 proto
+        self.rw.write_all(&[0x21])?; // UTF8_GENERAL_CI
+        self.rw.write_all(&[0x00, 0x00])?; // status flags
+        self.rw.write_all(&[0x00, 0x00])?; // extended capabilities
+        self.rw.write_all(&[0x00])?; // no plugins
+        self.rw.write_all(&[0x00; 6][..])?; // filler
+        self.rw.write_all(&[0x00; 4][..])?; // filler
+        self.rw.write_all(&b">o6^Wz!/kM}N\0"[..])?; // 4.1+ servers must extend salt
+        self.rw.flush()?;
 
         {
-            let (seq, handshake) = self.reader.next()?.ok_or_else(|| {
+            let (seq, handshake) = self.rw.next()?.ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::ConnectionAborted,
                     "peer terminated connection",
@@ -282,11 +275,11 @@ impl<B: MysqlShim<W>, R: Read, W: Write> MysqlIntermediary<B, R, W> {
                     }
                 })?
                 .1;
-            self.writer.set_seq(seq + 1);
+            self.rw.set_seq(seq + 1);
         }
 
-        writers::write_ok_packet(&mut self.writer, 0, 0, StatusFlags::empty())?;
-        self.writer.flush()?;
+        writers::write_ok_packet(&mut self.rw, 0, 0, StatusFlags::empty())?;
+        self.rw.flush()?;
 
         Ok(())
     }
@@ -295,13 +288,13 @@ impl<B: MysqlShim<W>, R: Read, W: Write> MysqlIntermediary<B, R, W> {
         use crate::commands::Command;
 
         let mut stmts: HashMap<u32, _> = HashMap::new();
-        while let Some((seq, packet)) = self.reader.next()? {
-            self.writer.set_seq(seq + 1);
+        while let Some((seq, packet)) = self.rw.next()? {
+            self.rw.set_seq(seq + 1);
             let cmd = commands::parse(&packet).unwrap().1;
             match cmd {
                 Command::Query(q) => {
                     if q.starts_with(b"SELECT @@") || q.starts_with(b"select @@") {
-                        let w = QueryResultWriter::new(&mut self.writer, false);
+                        let w = QueryResultWriter::new(&mut self.rw, false);
                         let var = &q[b"SELECT @@".len()..];
                         match var {
                             b"max_allowed_packet" => {
@@ -321,14 +314,14 @@ impl<B: MysqlShim<W>, R: Read, W: Write> MysqlIntermediary<B, R, W> {
                         }
                     } else if q.starts_with(b"USE ") || q.starts_with(b"use ") {
                         let w = InitWriter {
-                            writer: &mut self.writer,
+                            writer: &mut self.rw,
                         };
                         let schema = ::std::str::from_utf8(&q[b"USE ".len()..])
                             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
                         let schema = schema.trim().trim_end_matches(';').trim_matches('`');
                         self.shim.on_init(&schema, w)?;
                     } else {
-                        let w = QueryResultWriter::new(&mut self.writer, false);
+                        let w = QueryResultWriter::new(&mut self.rw, false);
                         self.shim.on_query(
                             ::std::str::from_utf8(q)
                                 .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
@@ -338,7 +331,7 @@ impl<B: MysqlShim<W>, R: Read, W: Write> MysqlIntermediary<B, R, W> {
                 }
                 Command::Prepare(q) => {
                     let w = StatementMetaWriter {
-                        writer: &mut self.writer,
+                        writer: &mut self.rw,
                         stmts: &mut stmts,
                     };
 
@@ -357,7 +350,7 @@ impl<B: MysqlShim<W>, R: Read, W: Write> MysqlIntermediary<B, R, W> {
                     })?;
                     {
                         let params = params::ParamParser::new(params, state);
-                        let w = QueryResultWriter::new(&mut self.writer, true);
+                        let w = QueryResultWriter::new(&mut self.rw, true);
                         self.shim.on_execute(stmt, params, w)?;
                     }
                     state.long_data.clear();
@@ -388,11 +381,11 @@ impl<B: MysqlShim<W>, R: Read, W: Write> MysqlIntermediary<B, R, W> {
                         coltype: myc::constants::ColumnType::MYSQL_TYPE_SHORT,
                         colflags: myc::constants::ColumnFlags::UNSIGNED_FLAG,
                     }];
-                    writers::write_column_definitions(cols, &mut self.writer, true, true)?;
+                    writers::write_column_definitions(cols, &mut self.rw, true, true)?;
                 }
                 Command::Init(schema) => {
                     let w = InitWriter {
-                        writer: &mut self.writer,
+                        writer: &mut self.rw,
                     };
                     self.shim.on_init(
                         ::std::str::from_utf8(schema)
@@ -401,13 +394,13 @@ impl<B: MysqlShim<W>, R: Read, W: Write> MysqlIntermediary<B, R, W> {
                     )?;
                 }
                 Command::Ping => {
-                    writers::write_ok_packet(&mut self.writer, 0, 0, StatusFlags::empty())?;
+                    writers::write_ok_packet(&mut self.rw, 0, 0, StatusFlags::empty())?;
                 }
                 Command::Quit => {
                     break;
                 }
             }
-            self.writer.flush()?;
+            self.rw.flush()?;
         }
         Ok(())
     }

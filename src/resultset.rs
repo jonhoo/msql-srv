@@ -1,5 +1,5 @@
 use crate::myc::constants::{ColumnFlags, StatusFlags};
-use crate::packet::PacketWriter;
+use crate::packet::PacketConn;
 use crate::value::ToMysqlValue;
 use crate::writers;
 use crate::{Column, ErrorKind, StatementData};
@@ -10,7 +10,7 @@ use std::io::{self, Write};
 
 /// Convenience type for responding to a client `USE <db>` command.
 pub struct InitWriter<'a, W: Write> {
-    pub(crate) writer: &'a mut PacketWriter<W>,
+    pub(crate) writer: &'a mut PacketConn<W>,
 }
 
 impl<'a, W: Write + 'a> InitWriter<'a, W> {
@@ -38,7 +38,7 @@ impl<'a, W: Write + 'a> InitWriter<'a, W> {
 /// [`error`](struct.StatementMetaWriter.html#method.error).
 #[must_use]
 pub struct StatementMetaWriter<'a, W: Write> {
-    pub(crate) writer: &'a mut PacketWriter<W>,
+    pub(crate) writer: &'a mut PacketConn<W>,
     pub(crate) stmts: &'a mut HashMap<u32, StatementData>,
 }
 
@@ -103,12 +103,12 @@ enum Finalizer {
 pub struct QueryResultWriter<'a, W: Write> {
     // XXX: specialization instead?
     pub(crate) is_bin: bool,
-    pub(crate) writer: &'a mut PacketWriter<W>,
+    pub(crate) writer: &'a mut PacketConn<W>,
     last_end: Option<Finalizer>,
 }
 
 impl<'a, W: Write> QueryResultWriter<'a, W> {
-    pub(crate) fn new(writer: &'a mut PacketWriter<W>, is_bin: bool) -> Self {
+    pub(crate) fn new(writer: &'a mut PacketConn<W>, is_bin: bool) -> Self {
         QueryResultWriter {
             is_bin,
             writer,

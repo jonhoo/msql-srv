@@ -1,12 +1,12 @@
 use crate::myc::constants::StatusFlags;
 use crate::myc::io::WriteMysqlExt;
-use crate::packet::PacketWriter;
+use crate::packet::PacketConn;
 use crate::{Column, ErrorKind};
 use byteorder::{LittleEndian, WriteBytesExt};
 use std::io::{self, Write};
 
 pub(crate) fn write_eof_packet<W: Write>(
-    w: &mut PacketWriter<W>,
+    w: &mut PacketConn<W>,
     s: StatusFlags,
 ) -> io::Result<()> {
     w.write_all(&[0xFE, 0x00, 0x00])?;
@@ -15,7 +15,7 @@ pub(crate) fn write_eof_packet<W: Write>(
 }
 
 pub(crate) fn write_ok_packet<W: Write>(
-    w: &mut PacketWriter<W>,
+    w: &mut PacketConn<W>,
     rows: u64,
     last_insert_id: u64,
     s: StatusFlags,
@@ -28,7 +28,11 @@ pub(crate) fn write_ok_packet<W: Write>(
     w.end_packet()
 }
 
-pub fn write_err<W: Write>(err: ErrorKind, msg: &[u8], w: &mut PacketWriter<W>) -> io::Result<()> {
+pub fn write_err<W: Write>(
+    err: ErrorKind,
+    msg: &[u8],
+    w: &mut PacketConn<W>,
+) -> io::Result<()> {
     w.write_u8(0xFF)?;
     w.write_u16::<LittleEndian>(err as u16)?;
     w.write_u8(b'#')?;
@@ -43,7 +47,7 @@ pub(crate) fn write_prepare_ok<'a, PI, CI, W>(
     id: u32,
     params: PI,
     columns: CI,
-    w: &mut PacketWriter<W>,
+    w: &mut PacketConn<W>,
 ) -> io::Result<()>
 where
     PI: IntoIterator<Item = &'a Column>,
@@ -70,7 +74,7 @@ where
 
 pub(crate) fn write_column_definitions<'a, I, W>(
     i: I,
-    w: &mut PacketWriter<W>,
+    w: &mut PacketConn<W>,
     is_comm_field_list_response: bool,
     only_eof_on_nonempty: bool,
 ) -> io::Result<()>
@@ -114,7 +118,7 @@ where
     }
 }
 
-pub(crate) fn column_definitions<'a, I, W>(i: I, w: &mut PacketWriter<W>) -> io::Result<()>
+pub(crate) fn column_definitions<'a, I, W>(i: I, w: &mut PacketConn<W>) -> io::Result<()>
 where
     I: IntoIterator<Item = &'a Column>,
     <I as IntoIterator>::IntoIter: ExactSizeIterator,

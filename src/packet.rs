@@ -4,13 +4,20 @@ use std::io::prelude::*;
 
 const U24_MAX: usize = 16_777_215;
 
-pub struct PacketWriter<W> {
+pub struct PacketConn<RW> {
+    rw: RW,
+
+    // read variables
+    bytes: Vec<u8>,
+    start: usize,
+    remaining: usize,
+
+    // write variables
     to_write: Vec<u8>,
     seq: u8,
-    w: W,
 }
 
-impl<W: Write> Write for PacketWriter<W> {
+impl<W: Write> Write for PacketConn<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         use std::cmp::min;
         let left = min(buf.len(), U24_MAX - self.to_write.len());
@@ -24,19 +31,25 @@ impl<W: Write> Write for PacketWriter<W> {
 
     fn flush(&mut self) -> io::Result<()> {
         self.maybe_end_packet()?;
-        self.w.flush()
+        self.rw.flush()
     }
 }
 
-impl<W: Write> PacketWriter<W> {
-    pub fn new(w: W) -> Self {
-        PacketWriter {
+impl<RW: Read + Write> PacketConn<RW> {
+    pub fn new(rw: RW) -> Self {
+        PacketConn {
+            bytes: Vec::new(),
+            start: 0,
+            remaining: 0,
+
             to_write: vec![0, 0, 0, 0],
             seq: 0,
-            w,
+            rw,
         }
     }
+}
 
+impl<W: Write> PacketConn<W> {
     fn maybe_end_packet(&mut self) -> io::Result<()> {
         let len = self.to_write.len() - 4;
         if len != 0 {
@@ -44,7 +57,7 @@ impl<W: Write> PacketWriter<W> {
             self.to_write[3] = self.seq;
             self.seq = self.seq.wrapping_add(1);
 
-            self.w.write_all(&self.to_write[..])?;
+            self.rw.write_all(&self.to_write[..])?;
             self.to_write.truncate(4); // back to just header
         }
         Ok(())
@@ -55,31 +68,13 @@ impl<W: Write> PacketWriter<W> {
     }
 }
 
-impl<W> PacketWriter<W> {
+impl<W> PacketConn<W> {
     pub fn set_seq(&mut self, seq: u8) {
         self.seq = seq;
     }
 }
 
-pub struct PacketReader<R> {
-    bytes: Vec<u8>,
-    start: usize,
-    remaining: usize,
-    r: R,
-}
-
-impl<R> PacketReader<R> {
-    pub fn new(r: R) -> Self {
-        PacketReader {
-            bytes: Vec::new(),
-            start: 0,
-            remaining: 0,
-            r,
-        }
-    }
-}
-
-impl<R: Read> PacketReader<R> {
+impl<R: Read> PacketConn<R> {
     pub fn next(&mut self) -> io::Result<Option<(u8, Packet)>> {
         self.start = self.bytes.len() - self.remaining;
 
@@ -115,7 +110,7 @@ impl<R: Read> PacketReader<R> {
             self.bytes.resize(std::cmp::max(4096, end * 2), 0);
             let read = {
                 let mut buf = &mut self.bytes[end..];
-                self.r.read(&mut buf)?
+                self.rw.read(&mut buf)?
             };
             self.bytes.truncate(end + read);
             self.remaining = self.bytes.len();
