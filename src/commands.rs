@@ -8,6 +8,7 @@ pub struct ClientHandshake<'a> {
     username: &'a [u8],
 }
 
+#[allow(clippy::branches_sharing_code)]
 pub fn client_handshake(i: &[u8]) -> nom::IResult<&[u8], ClientHandshake<'_>> {
     // mysql handshake protocol documentation
     // https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_connection_phase_packets_protocol_handshake_response.html

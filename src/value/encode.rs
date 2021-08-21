@@ -653,11 +653,7 @@ impl ToMysqlValue for myc::value::Value {
     }
 
     fn is_null(&self) -> bool {
-        if let myc::value::Value::NULL = *self {
-            true
-        } else {
-            false
-        }
+        matches!(*self, myc::value::Value::NULL)
     }
 }
 
@@ -667,6 +663,7 @@ mod tests {
     use super::ToMysqlValue;
     use crate::myc::value;
     use crate::myc::value::convert::from_value;
+    use crate::value::utils::tests::*;
     use crate::{Column, ColumnFlags, ColumnType};
     use chrono::{self, TimeZone};
     use std::time;
@@ -682,7 +679,7 @@ mod tests {
                     let v: $t = $v;
                     v.to_mysql_text(&mut data).unwrap();
                     assert_eq!(
-                        from_value::<$t>(value::read_text_value(&mut &data[..]).unwrap()),
+                        from_value::<$t>(read_text_value(&mut &data[..]).unwrap()),
                         v
                     );
                 }
@@ -754,9 +751,7 @@ mod tests {
                     let v: $t = $v;
                     v.to_mysql_bin(&mut data, &col).unwrap();
                     assert_eq!(
-                        from_value::<$t>(
-                            value::read_bin_value(&mut &data[..], $ct, !$sig).unwrap()
-                        ),
+                        from_value::<$t>(read_bin_value(&mut &data[..], $ct, !$sig).unwrap()),
                         v
                     );
                 }
