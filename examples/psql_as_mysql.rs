@@ -22,7 +22,8 @@ fn main() {
     let jh = thread::spawn(move || {
         if let Ok((s, _)) = listener.accept() {
             let conn =
-                postgres::Client::connect("host=localhost user=postgres", postgres::NoTls).unwrap();
+                postgres::Client::connect("postgresql://postgres@localhost:5432", postgres::NoTls)
+                    .unwrap();
             MysqlIntermediary::run_on_tcp(Postgres::new(conn), s).unwrap();
         }
     });
@@ -110,8 +111,26 @@ impl Postgres {
     }
 }
 
+#[derive(Debug)]
+enum Error {
+    Pg(postgres::Error),
+    Io(io::Error),
+}
+
+impl From<io::Error> for Error {
+    fn from(e: io::Error) -> Self {
+        Error::Io(e)
+    }
+}
+
+impl From<postgres::Error> for Error {
+    fn from(e: postgres::Error) -> Self {
+        Error::Pg(e)
+    }
+}
+
 impl<W: io::Write> MysqlShim<W> for Postgres {
-    type Error = anyhow::Error;
+    type Error = Error;
 
     fn on_prepare(&mut self, query: &str, info: StatementMetaWriter<W>) -> Result<(), Self::Error> {
         match self.connection.prepare(query) {
@@ -164,6 +183,7 @@ impl<W: io::Write> MysqlShim<W> for Postgres {
                 info.reply(id as u32, &stmt.params, &columns)?;
                 Ok(())
             }
+
             Err(e) => {
                 if let Some(db) = e.as_db_error() {
                     info.error(ErrorKind::ER_NO, db.message().as_bytes())?;
@@ -247,12 +267,11 @@ impl Drop for Postgres {
 fn answer_rows<W: io::Write>(
     results: QueryResultWriter<W>,
     rows: Result<Vec<postgres::Row>, postgres::Error>,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), Error> {
     match rows {
         Ok(rows) => {
-            let mut cols = vec![];
-            for row in &rows {
-                let col = &row
+            if let Some(first) = rows.iter().next() {
+                let cols: Vec<_> = first
                     .columns()
                     .into_iter()
                     .map(|c| {
@@ -265,34 +284,41 @@ fn answer_rows<W: io::Write>(
                             colflags: ColumnFlags::empty(),
                         }
                     })
-                    .collect::<Vec<Column>>()[0];
-                cols.push(col.clone());
-            }
+                    .collect();
 
-            let mut writer = results.start(&cols)?;
-            for row in &rows {
-                for (c, col) in cols.iter().enumerate() {
-                    match col.coltype {
-                        ColumnType::MYSQL_TYPE_SHORT => writer.write_col(row.get::<_, i16>(c))?,
-                        ColumnType::MYSQL_TYPE_LONG => writer.write_col(row.get::<_, i32>(c))?,
-                        ColumnType::MYSQL_TYPE_LONGLONG => {
-                            writer.write_col(row.get::<_, i64>(c))?
-                        }
-                        ColumnType::MYSQL_TYPE_FLOAT => writer.write_col(row.get::<_, f32>(c))?,
-                        ColumnType::MYSQL_TYPE_DOUBLE => writer.write_col(row.get::<_, f64>(c))?,
-                        ColumnType::MYSQL_TYPE_STRING => {
-                            writer.write_col(row.get::<_, String>(c))?
-                        }
-                        ct => unimplemented!(
-                            "don't know how to translate PostgreSQL \
+                let mut writer = results.start(&cols)?;
+                for row in &rows {
+                    for (c, col) in cols.iter().enumerate() {
+                        match col.coltype {
+                            ColumnType::MYSQL_TYPE_SHORT => {
+                                writer.write_col(row.get::<_, i16>(c))?
+                            }
+                            ColumnType::MYSQL_TYPE_LONG => {
+                                writer.write_col(row.get::<_, i32>(c))?
+                            }
+                            ColumnType::MYSQL_TYPE_LONGLONG => {
+                                writer.write_col(row.get::<_, i64>(c))?
+                            }
+                            ColumnType::MYSQL_TYPE_FLOAT => {
+                                writer.write_col(row.get::<_, f32>(c))?
+                            }
+                            ColumnType::MYSQL_TYPE_DOUBLE => {
+                                writer.write_col(row.get::<_, f64>(c))?
+                            }
+                            ColumnType::MYSQL_TYPE_STRING => {
+                                writer.write_col(row.get::<_, String>(c))?
+                            }
+                            ct => unimplemented!(
+                                "don't know how to translate PostgreSQL \
                              argument type {:?} into MySQL value",
-                            ct
-                        ),
+                                ct
+                            ),
+                        }
                     }
+                    writer.end_row()?;
                 }
-                writer.end_row()?;
+                writer.finish()?;
             }
-            writer.finish()?;
         }
         Err(e) => {
             results.error(ErrorKind::ER_BAD_SLAVE, format!("{:?}", e).as_bytes())?;
