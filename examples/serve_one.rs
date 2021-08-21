@@ -30,7 +30,8 @@ impl<W: io::Write> MysqlShim<W> for Backend {
     }
     fn on_close(&mut self, _: u32) {}
 
-    fn on_query(&mut self, _: &str, results: QueryResultWriter<W>) -> io::Result<()> {
+    fn on_query(&mut self, sql: &str, results: QueryResultWriter<W>) -> io::Result<()> {
+        println!("execute sql {:?}", sql);
         results.start(&[])?.finish()
     }
 }
