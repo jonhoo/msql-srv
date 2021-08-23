@@ -347,60 +347,58 @@ where
 }
 
 impl<'a, W: Write + 'a> RowWriter<'a, W> {
-    fn finish_inner(&mut self) -> io::Result<()> {
+    fn finish_inner(&mut self, complete: bool) -> io::Result<()> {
         if self.finished {
             return Ok(());
         }
+
         self.finished = true;
 
         if !self.columns.is_empty() && self.col != 0 {
             self.end_row()?;
         }
 
-        Ok(())
-    }
-
-    fn finish_completed(&mut self) -> io::Result<()> {
-        if self.columns.is_empty() {
-            // response to no column query is always an OK packet
-            // we've kept track of the number of rows in col (hacky, I know)
-            self.result.as_mut().unwrap().last_end = Some(Finalizer::Ok {
-                rows: self.col as u64,
-                last_insert_id: 0,
-            });
-        } else {
-            // we wrote out at least one row
-            self.result.as_mut().unwrap().last_end = Some(Finalizer::EOF);
+        if complete {
+            if self.columns.is_empty() {
+                // response to no column query is always an OK packet
+                // we've kept track of the number of rows in col (hacky, I know)
+                self.result.as_mut().unwrap().last_end = Some(Finalizer::Ok {
+                    rows: self.col as u64,
+                    last_insert_id: 0,
+                });
+            } else {
+                // we wrote out at least one row
+                self.result.as_mut().unwrap().last_end = Some(Finalizer::EOF);
+            }
         }
 
         Ok(())
     }
 
     /// Indicate to the client that no more rows are coming.
-    pub fn finish(mut self) -> io::Result<()> {
-        self.finish_inner()?;
-
-        self.finish_completed()?;
-
-        self.result.take().unwrap().no_more_results()
+    pub fn finish(self) -> io::Result<()> {
+        self.finish_one()?.no_more_results()
     }
 
     /// End this resultset response, and indicate to the client that no more rows are coming.
     pub fn finish_one(mut self) -> io::Result<QueryResultWriter<'a, W>> {
-        self.finish_inner()?;
+        self.finish_inner(true)?;
+
         // we know that dropping self will see self.finished == true,
         // and so Drop won't try to use self.result.
         Ok(self.result.take().unwrap())
     }
 
     /// End this resultset response, and indicate to the client there was an error.
-    pub fn finish_error<E>(self, kind: ErrorKind, msg: &E) -> io::Result<()> where E: Borrow<[u8]> {
-        self.finish_one()?.error(kind, msg)
+    pub fn finish_error<E>(mut self, kind: ErrorKind, msg: &E) -> io::Result<()> where E: Borrow<[u8]> {
+        self.finish_inner(false)?;
+
+        self.result.take().unwrap().error(kind, msg)
     }
 }
 
 impl<'a, W: Write + 'a> Drop for RowWriter<'a, W> {
     fn drop(&mut self) {
-        self.finish_inner().unwrap();
+        self.finish_inner(true).unwrap();
     }
 }
