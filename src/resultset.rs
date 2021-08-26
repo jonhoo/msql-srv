@@ -390,7 +390,10 @@ impl<'a, W: Write + 'a> RowWriter<'a, W> {
     }
 
     /// End this resultset response, and indicate to the client there was an error.
-    pub fn finish_error<E>(mut self, kind: ErrorKind, msg: &E) -> io::Result<()> where E: Borrow<[u8]> {
+    pub fn finish_error<E>(mut self, kind: ErrorKind, msg: &E) -> io::Result<()>
+    where
+        E: Borrow<[u8]>,
+    {
         self.finish_inner(false)?;
 
         self.result.take().unwrap().error(kind, msg)
