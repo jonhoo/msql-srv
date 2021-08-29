@@ -6,6 +6,24 @@ pub struct ClientHandshake<'a> {
     maxps: u32,
     collation: u16,
     username: &'a [u8],
+    pub database: Option<&'a [u8]>,
+}
+
+fn lenenc_int<'a, E: nom::error::ParseError<&'a [u8]>>(
+    i: &'a [u8],
+) -> nom::IResult<&'a [u8], u64, E> {
+    let (i, x) = nom::number::complete::le_u8(i)?;
+    match x {
+        x if x < 0xfc => Ok((i, x.into())),
+        0xfc => nom::number::complete::le_u16(i).map(|(i, v)| (i, v as u64)),
+        0xfd => nom::number::complete::le_u24(i).map(|(i, v)| (i, v as u64)),
+        0xfe => nom::number::complete::le_u64(i).map(|(i, v)| (i, v as u64)),
+        0xff => Err(nom::Err::Error(nom::error::make_error(
+            i,
+            nom::error::ErrorKind::Char,
+        ))),
+        _ => unreachable!(),
+    }
 }
 
 pub fn client_handshake(i: &[u8]) -> nom::IResult<&[u8], ClientHandshake<'_>> {
@@ -19,20 +37,38 @@ pub fn client_handshake(i: &[u8]) -> nom::IResult<&[u8], ClientHandshake<'_>> {
         // HandshakeResponse41
         let (i, cap2) = nom::number::complete::le_u16(i)?;
         let cap = (cap2 as u32) << 16 | cap as u32;
+        let capabilities = CapabilityFlags::from_bits_truncate(cap);
 
         let (i, maxps) = nom::number::complete::le_u32(i)?;
         let (i, collation) = nom::bytes::complete::take(1u8)(i)?;
         let (i, _) = nom::bytes::complete::take(23u8)(i)?;
         let (i, username) = nom::bytes::complete::take_until(&b"\0"[..])(i)?;
-        let (i, _) = nom::bytes::complete::tag(b"\0")(i)?;
-
+        let (mut i, _) = nom::bytes::complete::tag(b"\0")(i)?;
+        if capabilities.contains(CapabilityFlags::CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA) {
+            let (i2, auth_response_length) = lenenc_int(i)?;
+            let (i2, _) = nom::bytes::complete::take(auth_response_length)(i2)?;
+            i = i2;
+        } else if capabilities.contains(CapabilityFlags::CLIENT_SECURE_CONNECTION) {
+            let (i2, auth_response_length) = nom::number::complete::le_u8(i)?;
+            let (i2, _) = nom::bytes::complete::take(auth_response_length)(i2)?;
+            i = i2;
+        } else {
+            let (i2, _) = nom::bytes::complete::tag(b"\0")(i)?;
+            i = i2;
+        }
+        let mut database = None;
+        if capabilities.contains(CapabilityFlags::CLIENT_CONNECT_WITH_DB) {
+            let (_, database2) = nom::bytes::complete::tag(b"\0")(i)?;
+            database = Some(database2);
+        }
         Ok((
             i,
             ClientHandshake {
-                capabilities: CapabilityFlags::from_bits_truncate(cap),
+                capabilities: capabilities,
                 maxps,
                 collation: u16::from(collation[0]),
                 username,
+                database,
             },
         ))
     } else {
@@ -49,6 +85,7 @@ pub fn client_handshake(i: &[u8]) -> nom::IResult<&[u8], ClientHandshake<'_>> {
                 maxps,
                 collation: 0,
                 username,
+                database: None,
             },
         ))
     }
