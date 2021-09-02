@@ -228,7 +228,7 @@ struct StatementData {
 }
 
 impl<B: MysqlShim<RW>, RW: Read + Write> MysqlIntermediary<B, RW> {
-    /// Create a new server over two one-way channels and process client commands until the client
+    /// Create a new server over a two-way channel and process client commands until the client
     /// disconnects or an error occurs.
     pub fn run_on(shim: B, rw: RW) -> Result<(), B::Error> {
         let rw = packet::PacketConn::new(rw);
