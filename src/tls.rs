@@ -1,8 +1,8 @@
 use std::io::{BufReader, Read, Write};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::{fs, io};
 
-use rustls::{self, Connection, NoClientAuth, ServerConfig, ServerConnection};
+use rustls::{self, NoClientAuth, ServerConfig, ServerConnection};
 
 /// TLS configuration
 #[derive(Clone)]
@@ -76,63 +76,12 @@ fn load_private_key(filename: &str) -> Result<rustls::PrivateKey, io::Error> {
     ))
 }
 
-pub struct TlsStream<C: Connection + Sized, T: Read + Write + Sized> {
-    stream: Arc<Mutex<rustls::StreamOwned<C, T>>>,
-}
-
-impl<C, T> Clone for TlsStream<C, T>
-where
-    C: Connection,
-    T: Read + Write,
-{
-    fn clone(&self) -> Self {
-        TlsStream {
-            stream: Arc::clone(&self.stream),
-        }
-    }
-}
-
-impl<C, T> Write for TlsStream<C, T>
-where
-    C: Connection,
-    T: Read + Write,
-{
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let stream = &mut self.stream.lock().unwrap();
-
-        stream.write(buf)
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        let stream = &mut self.stream.lock().unwrap();
-
-        stream.flush()?;
-
-        Ok(())
-    }
-}
-
-impl<C, T> Read for TlsStream<C, T>
-where
-    C: Connection,
-    T: Read + Write,
-{
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let stream = &mut self.stream.lock().unwrap();
-
-        stream.read(buf)
-    }
-}
-
-pub fn create_stream<S: Read + Write>(
-    sock: S,
+pub fn create_stream<T: Read + Write + Sized>(
+    sock: T,
     config: &TlsConfig,
-) -> Result<TlsStream<ServerConnection, S>, io::Error> {
+) -> Result<rustls::StreamOwned<ServerConnection, T>, io::Error> {
     let config = make_config(config)?;
-
     let conn = ServerConnection::new(config).unwrap();
-
-    let stream = Arc::new(Mutex::new(rustls::StreamOwned { conn, sock }));
-
-    Ok(TlsStream { stream })
+    let stream = rustls::StreamOwned { conn, sock };
+    Ok(stream)
 }

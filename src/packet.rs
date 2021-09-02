@@ -172,7 +172,6 @@ impl AsRef<[u8]> for Packet {
 
 use std::ops::Deref;
 
-use crate::tls::TlsStream;
 use crate::{tls, TlsConfig};
 impl Deref for Packet {
     type Target = [u8];
@@ -218,7 +217,7 @@ pub struct SwitchableConn<T: Read + Write>(Option<EitherConn<T>>);
 
 pub enum EitherConn<T: Read + Write> {
     Plain(T),
-    TLS(TlsStream<ServerConnection, T>),
+    TLS(rustls::StreamOwned<ServerConnection, T>),
 }
 
 impl<T: Read + Write> Read for SwitchableConn<T> {
