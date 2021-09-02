@@ -137,7 +137,6 @@ pub struct Column {
 pub use crate::errorcodes::ErrorKind;
 pub use crate::params::{ParamParser, ParamValue, Params};
 pub use crate::resultset::{InitWriter, QueryResultWriter, RowWriter, StatementMetaWriter};
-pub use crate::tls::TlsConfig;
 pub use crate::value::{ToMysqlValue, Value, ValueInner};
 
 /// Implementors of this trait can be used to drive a MySQL-compatible database backend.
@@ -190,7 +189,7 @@ pub trait MysqlShim<W: Read + Write> {
     }
 
     /// Provides the TLS configuration, if we want to support TLS.
-    fn tls_config(&self) -> Option<&TlsConfig> {
+    fn tls_config(&self) -> Option<&rustls::ServerConfig> {
         None
     }
 }

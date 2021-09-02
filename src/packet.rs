@@ -68,7 +68,7 @@ impl<W: Read + Write> PacketConn<W> {
         self.maybe_end_packet()
     }
 
-    pub fn switch_to_tls(&mut self, config: &TlsConfig) -> io::Result<()> {
+    pub fn switch_to_tls(&mut self, config: &rustls::ServerConfig) -> io::Result<()> {
         assert!(self.remaining() == 0); // otherwise we've read ahead into the TLS handshake and will be in trouble.
 
         self.rw.switch_to_tls(config)
@@ -172,7 +172,7 @@ impl AsRef<[u8]> for Packet {
 
 use std::ops::Deref;
 
-use crate::{tls, TlsConfig};
+use crate::tls;
 impl Deref for Packet {
     type Target = [u8];
     fn deref(&self) -> &Self::Target {
@@ -250,10 +250,10 @@ impl<T: Read + Write> SwitchableConn<T> {
         SwitchableConn(Some(EitherConn::Plain(rw)))
     }
 
-    pub fn switch_to_tls(&mut self, config: &TlsConfig) -> io::Result<()> {
+    pub fn switch_to_tls(&mut self, config: &rustls::ServerConfig) -> io::Result<()> {
         let replacement = match self.0.take() {
             Some(EitherConn::Plain(plain)) => {
-                Ok(EitherConn::TLS(tls::create_stream(plain, &config)?))
+                Ok(EitherConn::TLS(tls::create_stream(plain, config)?))
             }
             Some(EitherConn::TLS(_)) => Err(io::Error::new(
                 io::ErrorKind::Other,
