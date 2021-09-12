@@ -44,6 +44,7 @@ impl<W: Write> PacketWriter<W> {
             self.to_write[3] = self.seq;
             self.seq = self.seq.wrapping_add(1);
 
+            println!("writer {:?}", &self.to_write[..]);
             self.w.write_all(&self.to_write[..])?;
             self.to_write.truncate(4); // back to just header
         }

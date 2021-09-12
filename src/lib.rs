@@ -105,7 +105,7 @@ use std::io::prelude::*;
 use std::iter;
 use std::net;
 
-pub use crate::myc::constants::{ColumnFlags, ColumnType, StatusFlags};
+pub use crate::myc::constants::{CapabilityFlags, ColumnFlags, ColumnType, StatusFlags};
 
 mod commands;
 mod errorcodes;
@@ -140,12 +140,59 @@ pub use crate::params::{ParamParser, ParamValue, Params};
 pub use crate::resultset::{InitWriter, QueryResultWriter, RowWriter, StatementMetaWriter};
 pub use crate::value::{ToMysqlValue, Value, ValueInner};
 
+const SCRAMBLE_SIZE: usize = 20;
+
 /// Implementors of this trait can be used to drive a MySQL-compatible database backend.
 pub trait MysqlShim<W: Write> {
     /// The error type produced by operations on this shim.
     ///
     /// Must implement `From<io::Error>` so that transport-level errors can be lifted.
     type Error: From<io::Error>;
+
+    /// Server version
+    fn version(&self) -> &str {
+        // 5.1.10 because that's what Ruby's ActiveRecord requires
+        "5.1.10-alpha-msql-proxy"
+    }
+
+    /// Connection id
+    fn connect_id(&self) -> u32 {
+        u32::from_le_bytes([0x08, 0x00, 0x00, 0x00])
+    }
+
+    /// get auth plugin
+    fn default_auth_plugin(&self) -> &str {
+        "mysql_native_password"
+    }
+
+    /// get auth plugin
+    fn auth_plugin_for_username(&self, _user: &[u8]) -> &str {
+        "mysql_native_password"
+    }
+
+    /// Default salt(scramble) for auth plugin
+    fn salt(&self) -> [u8; SCRAMBLE_SIZE] {
+        let bs = ";X,po_k}>o6^Wz!/kM}N".as_bytes();
+        let mut scramble: [u8; SCRAMBLE_SIZE] = [0; SCRAMBLE_SIZE];
+        for i in 0..SCRAMBLE_SIZE {
+            scramble[i] = bs[i];
+            if scramble[i] == b'\0' || scramble[i] == b'$' {
+                scramble[i] = scramble[i] + 1;
+            }
+        }
+        scramble
+    }
+
+    /// authenticate method for the specified plugin
+    fn authenticate(
+        &self,
+        _auth_plugin: &str,
+        _username: &[u8],
+        _salt: &[u8],
+        _auth_data: &[u8],
+    ) -> bool {
+        true
+    }
 
     /// Called when the client issues a request to prepare `query` for later execution.
     ///
@@ -224,6 +271,7 @@ struct StatementData {
     params: u16,
 }
 
+const AUTH_PLUGIN_DATA_PART_1_LENGTH: usize = 8;
 impl<B: MysqlShim<W>, R: Read, W: Write> MysqlIntermediary<B, R, W> {
     /// Create a new server over two one-way channels and process client commands until the client
     /// disconnects or an error occurs.
@@ -240,21 +288,59 @@ impl<B: MysqlShim<W>, R: Read, W: Write> MysqlIntermediary<B, R, W> {
     }
 
     fn init(&mut self) -> Result<(), B::Error> {
+        // https://dev.mysql.com/doc/internals/en/connection-phase-packets.html#packet-Protocol::HandshakeV10
         self.writer.write_all(&[10])?; // protocol 10
 
-        // 5.1.10 because that's what Ruby's ActiveRecord requires
-        self.writer.write_all(&b"5.1.10-alpha-msql-proxy\0"[..])?;
+        self.writer.write_all(self.shim.version().as_bytes())?;
+        self.writer.write_all(&[0x00])?;
 
-        self.writer.write_all(&[0x08, 0x00, 0x00, 0x00])?; // TODO: connection ID
-        self.writer.write_all(&b";X,po_k}\0"[..])?; // auth seed
-        self.writer.write_all(&[0x00, 0x42])?; // just 4.1 proto
+        // connection_id (4 bytes)
+        self.writer
+            .write_all(&self.shim.connect_id().to_le_bytes())?;
+
+        let server_capabilities = (
+            CapabilityFlags::CLIENT_PROTOCOL_41
+                | CapabilityFlags::CLIENT_SECURE_CONNECTION
+                | CapabilityFlags::CLIENT_PLUGIN_AUTH
+                | CapabilityFlags::CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA
+                | CapabilityFlags::CLIENT_CONNECT_WITH_DB
+                | CapabilityFlags::CLIENT_RESERVED
+            // | CapabilityFlags::CLIENT_SSL
+        )
+            .bits();
+
+        let server_capabilities = server_capabilities.to_le_bytes();
+        let default_auth_plugin = self.shim.default_auth_plugin();
+        let scramble = self.shim.salt();
+
+        self.writer
+            .write_all(&scramble[0..AUTH_PLUGIN_DATA_PART_1_LENGTH])?; // auth-plugin-data-part-1
+        self.writer.write_all(&[0x00])?;
+
+        self.writer.write_all(&server_capabilities[..2])?; // The lower 2 bytes of the Capabilities Flags, 0x42
+                                                           // self.writer.write_all(&[0x00, 0x42])?;
         self.writer.write_all(&[0x21])?; // UTF8_GENERAL_CI
-        self.writer.write_all(&[0x00, 0x00])?; // status flags
-        self.writer.write_all(&[0x00, 0x00])?; // extended capabilities
-        self.writer.write_all(&[0x00])?; // no plugins
-        self.writer.write_all(&[0x00; 6][..])?; // filler
-        self.writer.write_all(&[0x00; 4][..])?; // filler
-        self.writer.write_all(&b">o6^Wz!/kM}N\0"[..])?; // 4.1+ servers must extend salt
+        self.writer.write_all(&[0x00, 0x00])?; // status_flags
+        self.writer.write_all(&server_capabilities[2..4])?; // The upper 2 bytes of the Capabilities Flags
+
+        if default_auth_plugin.is_empty() {
+            // no plugins
+            self.writer.write_all(&[0x00])?;
+        } else {
+            self.writer
+                .write_all(&((scramble.len() + 1) as u8).to_le_bytes())?; // length of the combined auth_plugin_data(scramble), if auth_plugin_data_len is > 0
+        }
+        self.writer.write_all(&[0x00; 10][..])?; // 10 bytes filler
+
+        // Part2 of the auth_plugin_data
+        // $len=MAX(13, length of auth-plugin-data - 8)
+        self.writer
+            .write_all(&scramble[AUTH_PLUGIN_DATA_PART_1_LENGTH..])?; // 12 bytes
+        self.writer.write_all(&[0x00])?;
+
+        // Plugin name
+        self.writer.write_all(default_auth_plugin.as_bytes())?;
+        self.writer.write_all(&[0x00])?;
         self.writer.flush()?;
 
         {
@@ -264,7 +350,7 @@ impl<B: MysqlShim<W>, R: Read, W: Write> MysqlIntermediary<B, R, W> {
                     "peer terminated connection",
                 )
             })?;
-            let _handshake = commands::client_handshake(&handshake)
+            let handshake = commands::client_handshake(&handshake)
                 .map_err(|e| match e {
                     nom::Err::Incomplete(_) => io::Error::new(
                         io::ErrorKind::UnexpectedEof,
@@ -291,7 +377,60 @@ impl<B: MysqlShim<W>, R: Read, W: Write> MysqlIntermediary<B, R, W> {
                     }
                 })?
                 .1;
+
+            let mut auth_response = handshake.auth_response.clone();
+            let auth_plugin_expect = self.shim.auth_plugin_for_username(&handshake.username);
+
+            // auth switch
+            if !auth_plugin_expect.is_empty()
+                && auth_response.is_empty()
+                && handshake.auth_plugin != auth_plugin_expect.as_bytes()
+            {
+                self.writer.write_all(&[0xfe])?;
+                self.writer.write_all(auth_plugin_expect.as_bytes())?;
+                self.writer.write_all(&[0x00])?;
+                self.writer.write_all(&scramble)?;
+                self.writer.write_all(&[0x00])?;
+
+                self.writer.flush()?;
+
+                println!("x22x {:?}", scramble);
+
+                {
+                    let (_seq, auth_response_data) = self.reader.next()?.ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::ConnectionAborted,
+                            "peer terminated connection",
+                        )
+                    })?;
+
+                    auth_response = auth_response_data.to_vec();
+                }
+
+                println!("x2233x {:?}", auth_response);
+            }
+
             self.writer.set_seq(seq + 1);
+
+            if !self.shim.authenticate(
+                auth_plugin_expect,
+                &handshake.username,
+                &scramble,
+                auth_response.as_slice(),
+            ) {
+                let err_msg = format!(
+                    "Authenticate failed, user: {:?}, auth_plugin: {:?}",
+                    String::from_utf8_lossy(&handshake.username),
+                    auth_plugin_expect,
+                );
+                writers::write_err(
+                    ErrorKind::ER_ACCESS_DENIED_NO_PASSWORD_ERROR,
+                    err_msg.as_bytes(),
+                    &mut self.writer,
+                )?;
+                self.writer.flush()?;
+                return Err(io::Error::new(io::ErrorKind::PermissionDenied, err_msg))?;
+            }
         }
 
         writers::write_ok_packet(&mut self.writer, 0, 0, StatusFlags::empty())?;
