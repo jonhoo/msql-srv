@@ -368,7 +368,7 @@ impl<'a, W: Write + 'a> RowWriter<'a, W> {
                 });
             } else {
                 // we wrote out at least one row
-                self.result.as_mut().unwrap().last_end = Some(Finalizer::EOF);
+                self.result.as_mut().unwrap().last_end = Some(Finalizer::Eof);
             }
         }
 
