@@ -44,7 +44,6 @@ impl<W: Write> PacketWriter<W> {
             self.to_write[3] = self.seq;
             self.seq = self.seq.wrapping_add(1);
 
-            println!("writer {:?}", &self.to_write[..]);
             self.w.write_all(&self.to_write[..])?;
             self.to_write.truncate(4); // back to just header
         }
@@ -94,6 +93,7 @@ impl<R: Read> PacketReader<R> {
                     let bytes = &self.bytes[self.start..];
                     unsafe { ::std::slice::from_raw_parts(bytes.as_ptr(), bytes.len()) }
                 };
+
                 match packet(bytes) {
                     Ok((rest, p)) => {
                         self.remaining = rest.len();

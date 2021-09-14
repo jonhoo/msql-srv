@@ -15,7 +15,6 @@ pub struct ClientHandshake {
 pub fn client_handshake(i: &[u8]) -> nom::IResult<&[u8], ClientHandshake> {
     // mysql handshake protocol documentation
     // https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_connection_phase_packets_protocol_handshake_response.html
-
     let (i, cap) = nom::number::complete::le_u16(i)?;
 
     let mut capabilities = CapabilityFlags::from_bits_truncate(cap as u32);
@@ -34,25 +33,16 @@ pub fn client_handshake(i: &[u8]) -> nom::IResult<&[u8], ClientHandshake> {
         let (i, username) = nom::bytes::complete::take_until(&b"\0"[..])(i)?;
         let (i, _) = nom::bytes::complete::tag(b"\0")(i)?;
 
-        println!("iii {:?}", i);
         let (i, auth_response) =
             if capabilities.contains(CapabilityFlags::CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA) {
-                println!("iii0 {:?}", i);
-
                 let (i, size) = read_length_encoded_number(i)?;
                 nom::bytes::complete::take(size)(i)?
             } else if capabilities.contains(CapabilityFlags::CLIENT_SECURE_CONNECTION) {
-                println!("iii1 {:?}", i);
-
                 let (i, size) = nom::number::complete::le_u8(i)?;
                 nom::bytes::complete::take(size)(i)?
             } else {
-                println!("iii2 {:?}", i);
-
                 nom::bytes::complete::take_until(&b"\0"[..])(i)?
             };
-
-        println!("iii3 {:?}", i);
 
         let (i, db) =
             if capabilities.contains(CapabilityFlags::CLIENT_CONNECT_WITH_DB) && !i.is_empty() {
@@ -65,8 +55,6 @@ pub fn client_handshake(i: &[u8]) -> nom::IResult<&[u8], ClientHandshake> {
 
         let (i, auth_plugin) =
             if capabilities.contains(CapabilityFlags::CLIENT_PLUGIN_AUTH) && !i.is_empty() {
-                println!("iii55 {:?}", i);
-
                 let (i, auth_plugin) = nom::bytes::complete::take_until(&b"\0"[..])(i)?;
 
                 let (i, _) = nom::bytes::complete::tag(b"\0")(i)?;
@@ -226,12 +214,13 @@ mod tests {
     #[test]
     fn it_parses_handshake() {
         let data = &[
-            0x4f, 0x00, 0x00, 0x01, 0x85, 0xa6, 0xff, 0x09, 0x00, 0x00, 0x00, 0x01, 0x21, 0x00,
+            0x5b, 0x00, 0x00, 0x01, 0x8d, 0xa6, 0xff, 0x09, 0x00, 0x00, 0x00, 0x01, 0x21, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x6a, 0x6f, 0x6e, 0x00, 0x14, 0xf7,
-            0xd1, 0x6c, 0xe9, 0x0d, 0x2f, 0x34, 0xb0, 0x2f, 0xd8, 0x1d, 0x18, 0xc7, 0xa4, 0xe8,
-            0x98, 0x97, 0x67, 0xeb, 0xad, 0x6d, 0x79, 0x73, 0x71, 0x6c, 0x5f, 0x6e, 0x61, 0x74,
-            0x69, 0x76, 0x65, 0x5f, 0x70, 0x61, 0x73, 0x73, 0x77, 0x6f, 0x72, 0x64, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x64, 0x65, 0x66, 0x61, 0x75, 0x6c,
+            0x74, 0x00, 0x14, 0xf7, 0xd1, 0x6c, 0xe9, 0x0d, 0x2f, 0x34, 0xb0, 0x2f, 0xd8, 0x1d,
+            0x18, 0xc7, 0xa4, 0xe8, 0x98, 0x97, 0x67, 0xeb, 0xad, 0x64, 0x65, 0x66, 0x61, 0x75,
+            0x6c, 0x74, 0x00, 0x6d, 0x79, 0x73, 0x71, 0x6c, 0x5f, 0x6e, 0x61, 0x74, 0x69, 0x76,
+            0x65, 0x5f, 0x70, 0x61, 0x73, 0x73, 0x77, 0x6f, 0x72, 0x64, 0x00,
         ];
 
         let r = Cursor::new(&data[..]);
@@ -245,14 +234,14 @@ mod tests {
         assert!(handshake
             .capabilities
             .contains(CapabilityFlags::CLIENT_MULTI_RESULTS));
-        assert!(!handshake
+        assert!(handshake
             .capabilities
             .contains(CapabilityFlags::CLIENT_CONNECT_WITH_DB));
         assert!(handshake
             .capabilities
             .contains(CapabilityFlags::CLIENT_DEPRECATE_EOF));
         assert_eq!(handshake.collation, UTF8_GENERAL_CI);
-        assert_eq!(handshake.username, &b"jon"[..]);
+        assert_eq!(handshake.username, &b"default"[..]);
         assert_eq!(handshake.maxps, 16777216);
     }
 

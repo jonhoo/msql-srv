@@ -393,9 +393,6 @@ impl<B: MysqlShim<W>, R: Read, W: Write> MysqlIntermediary<B, R, W> {
                 self.writer.write_all(&[0x00])?;
 
                 self.writer.flush()?;
-
-                println!("x22x {:?}", scramble);
-
                 {
                     let (_seq, auth_response_data) = self.reader.next()?.ok_or_else(|| {
                         io::Error::new(
@@ -406,8 +403,6 @@ impl<B: MysqlShim<W>, R: Read, W: Write> MysqlIntermediary<B, R, W> {
 
                     auth_response = auth_response_data.to_vec();
                 }
-
-                println!("x2233x {:?}", auth_response);
             }
 
             self.writer.set_seq(seq + 1);
