@@ -104,6 +104,7 @@ use std::io;
 use std::io::prelude::*;
 use std::iter;
 use std::net;
+use std::net::SocketAddr;
 
 pub use crate::myc::constants::{CapabilityFlags, ColumnFlags, ColumnType, StatusFlags};
 
@@ -140,7 +141,10 @@ pub use crate::params::{ParamParser, ParamValue, Params};
 pub use crate::resultset::{InitWriter, QueryResultWriter, RowWriter, StatementMetaWriter};
 pub use crate::value::{ToMysqlValue, Value, ValueInner};
 
-const SCRAMBLE_SIZE: usize = 20;
+/// Salt length, we set the salt as fixed 20 bytes.
+pub const SALT_SIZE: usize = 20;
+
+const AUTH_PLUGIN_DATA_PART_1_LENGTH: usize = 8;
 
 /// Implementors of this trait can be used to drive a MySQL-compatible database backend.
 pub trait MysqlShim<W: Write> {
@@ -155,32 +159,38 @@ pub trait MysqlShim<W: Write> {
         "5.1.10-alpha-msql-proxy"
     }
 
-    /// Connection id
-    fn connect_id(&self) -> u32 {
+    /// Default connection id
+    fn connection_id(&self) -> u32 {
         u32::from_le_bytes([0x08, 0x00, 0x00, 0x00])
     }
 
-    /// get auth plugin
+    /// default plugin for authentication
+    /// Plugin methods: https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_connection_phase_authentication_methods.html
     fn default_auth_plugin(&self) -> &str {
         "mysql_native_password"
     }
 
-    /// get auth plugin
-    fn auth_plugin_for_username(&self, _user: &[u8]) -> &str {
+    /// Called when reading the handshake response by client's auth_plugin
+    /// See: https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_connection_phase.html#sect_protocol_connection_phase_auth_method_mismatch
+    fn auth_plugin_for_user(&self, _user: &[u8]) -> &str {
         "mysql_native_password"
     }
 
-    /// Default salt(scramble) for auth plugin
-    fn salt(&self) -> [u8; SCRAMBLE_SIZE] {
+    /// Called when initializing the handshake
+    ///
+    /// Default salt for auth plugin
+    /// This is from: https://github.com/mysql/mysql-server/blob/8.0/mysys/crypt_genhash_impl.cc#L425-L436
+    fn salt(&self) -> [u8; SALT_SIZE] {
+        // Provide a fixed salt for now (avoid introducing a dependency on rand)
         let bs = ";X,po_k}>o6^Wz!/kM}N".as_bytes();
-        let mut scramble: [u8; SCRAMBLE_SIZE] = [0; SCRAMBLE_SIZE];
-        for i in 0..SCRAMBLE_SIZE {
-            scramble[i] = bs[i];
-            if scramble[i] == b'\0' || scramble[i] == b'$' {
-                scramble[i] = scramble[i] + 1;
+        let mut salt: [u8; SALT_SIZE] = [0; SALT_SIZE];
+        for i in 0..SALT_SIZE {
+            salt[i] = bs[i];
+            if salt[i] == b'\0' || salt[i] == b'$' {
+                salt[i] += 1;
             }
         }
-        scramble
+        salt
     }
 
     /// authenticate method for the specified plugin
@@ -243,6 +253,7 @@ pub struct MysqlIntermediary<B, R: Read, W: Write> {
     shim: B,
     reader: packet::PacketReader<R>,
     writer: packet::PacketWriter<W>,
+    socket_addr: SocketAddr,
 }
 
 impl<B: MysqlShim<net::TcpStream>> MysqlIntermediary<B, net::TcpStream, net::TcpStream> {
@@ -251,7 +262,8 @@ impl<B: MysqlShim<net::TcpStream>> MysqlIntermediary<B, net::TcpStream, net::Tcp
     /// [`MysqlIntermediary::run_on`](struct.MysqlIntermediary.html#method.run_on).
     pub fn run_on_tcp(shim: B, stream: net::TcpStream) -> Result<(), B::Error> {
         let w = stream.try_clone()?;
-        MysqlIntermediary::run_on(shim, stream, w)
+        let socket_addr = stream.peer_addr()?;
+        MysqlIntermediary::run_on(shim, stream, w, socket_addr)
     }
 }
 
@@ -259,8 +271,8 @@ impl<B: MysqlShim<S>, S: Read + Write + Clone> MysqlIntermediary<B, S, S> {
     /// Create a new server over a two-way stream and process client commands until the client
     /// disconnects or an error occurs. See also
     /// [`MysqlIntermediary::run_on`](struct.MysqlIntermediary.html#method.run_on).
-    pub fn run_on_stream(shim: B, stream: S) -> Result<(), B::Error> {
-        MysqlIntermediary::run_on(shim, stream.clone(), stream)
+    pub fn run_on_stream(shim: B, stream: S, socket_addr: SocketAddr) -> Result<(), B::Error> {
+        MysqlIntermediary::run_on(shim, stream.clone(), stream, socket_addr)
     }
 }
 
@@ -271,17 +283,17 @@ struct StatementData {
     params: u16,
 }
 
-const AUTH_PLUGIN_DATA_PART_1_LENGTH: usize = 8;
 impl<B: MysqlShim<W>, R: Read, W: Write> MysqlIntermediary<B, R, W> {
     /// Create a new server over two one-way channels and process client commands until the client
     /// disconnects or an error occurs.
-    pub fn run_on(shim: B, reader: R, writer: W) -> Result<(), B::Error> {
+    pub fn run_on(shim: B, reader: R, writer: W, socket_addr: SocketAddr) -> Result<(), B::Error> {
         let r = packet::PacketReader::new(reader);
         let w = packet::PacketWriter::new(writer);
         let mut mi = MysqlIntermediary {
             shim,
             reader: r,
             writer: w,
+            socket_addr,
         };
         mi.init()?;
         mi.run()
@@ -296,46 +308,36 @@ impl<B: MysqlShim<W>, R: Read, W: Write> MysqlIntermediary<B, R, W> {
 
         // connection_id (4 bytes)
         self.writer
-            .write_all(&self.shim.connect_id().to_le_bytes())?;
+            .write_all(&self.shim.connection_id().to_le_bytes())?;
 
-        let server_capabilities = (
-            CapabilityFlags::CLIENT_PROTOCOL_41
-                | CapabilityFlags::CLIENT_SECURE_CONNECTION
-                | CapabilityFlags::CLIENT_PLUGIN_AUTH
-                | CapabilityFlags::CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA
-                | CapabilityFlags::CLIENT_CONNECT_WITH_DB
-                | CapabilityFlags::CLIENT_RESERVED
-            // | CapabilityFlags::CLIENT_SSL
-        )
+        // DefaultCapability is the capability of the server when it is created using the default configuration.
+        // When server is configured with SSL, the server will have extra capabilities compared to DefaultCapability.
+        let server_capabilities = (CapabilityFlags::CLIENT_PROTOCOL_41
+            | CapabilityFlags::CLIENT_SECURE_CONNECTION // this is required for `Secure Password Authentication`
+            | CapabilityFlags::CLIENT_PLUGIN_AUTH
+            | CapabilityFlags::CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA
+            | CapabilityFlags::CLIENT_CONNECT_WITH_DB)
             .bits();
 
         let server_capabilities = server_capabilities.to_le_bytes();
         let default_auth_plugin = self.shim.default_auth_plugin();
-        let scramble = self.shim.salt();
+        let salt = self.shim.salt();
 
         self.writer
-            .write_all(&scramble[0..AUTH_PLUGIN_DATA_PART_1_LENGTH])?; // auth-plugin-data-part-1
+            .write_all(&salt[0..AUTH_PLUGIN_DATA_PART_1_LENGTH])?; // auth-plugin-data-part-1, 8 bytes
         self.writer.write_all(&[0x00])?;
 
         self.writer.write_all(&server_capabilities[..2])?; // The lower 2 bytes of the Capabilities Flags, 0x42
-                                                           // self.writer.write_all(&[0x00, 0x42])?;
         self.writer.write_all(&[0x21])?; // UTF8_GENERAL_CI
         self.writer.write_all(&[0x00, 0x00])?; // status_flags
         self.writer.write_all(&server_capabilities[2..4])?; // The upper 2 bytes of the Capabilities Flags
-
-        if default_auth_plugin.is_empty() {
-            // no plugins
-            self.writer.write_all(&[0x00])?;
-        } else {
-            self.writer
-                .write_all(&((scramble.len() + 1) as u8).to_le_bytes())?; // length of the combined auth_plugin_data(scramble), if auth_plugin_data_len is > 0
-        }
+        self.writer
+            .write_all(&((salt.len() + 1) as u8).to_le_bytes())?; // length of the combined auth_plugin_data(SALT)
         self.writer.write_all(&[0x00; 10][..])?; // 10 bytes filler
 
         // Part2 of the auth_plugin_data
-        // $len=MAX(13, length of auth-plugin-data - 8)
         self.writer
-            .write_all(&scramble[AUTH_PLUGIN_DATA_PART_1_LENGTH..])?; // 12 bytes
+            .write_all(&salt[AUTH_PLUGIN_DATA_PART_1_LENGTH..])?; // 12 bytes
         self.writer.write_all(&[0x00])?;
 
         // Plugin name
@@ -343,89 +345,86 @@ impl<B: MysqlShim<W>, R: Read, W: Write> MysqlIntermediary<B, R, W> {
         self.writer.write_all(&[0x00])?;
         self.writer.flush()?;
 
-        {
-            let (seq, handshake) = self.reader.next()?.ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::ConnectionAborted,
-                    "peer terminated connection",
-                )
-            })?;
-            let handshake = commands::client_handshake(&handshake)
-                .map_err(|e| match e {
-                    nom::Err::Incomplete(_) => io::Error::new(
-                        io::ErrorKind::UnexpectedEof,
-                        "client sent incomplete handshake",
-                    ),
-                    nom::Err::Failure(nom_error) | nom::Err::Error(nom_error) => {
-                        if let nom::error::ErrorKind::Eof = nom_error.code {
-                            io::Error::new(
-                                io::ErrorKind::UnexpectedEof,
-                                format!(
-                                    "client did not complete handshake; got {:?}",
-                                    nom_error.input
-                                ),
-                            )
-                        } else {
-                            io::Error::new(
-                                io::ErrorKind::InvalidData,
-                                format!(
-                                    "bad client handshake; got {:?} ({:?})",
-                                    nom_error.input, nom_error.code
-                                ),
-                            )
-                        }
-                    }
-                })?
-                .1;
-
-            let mut auth_response = handshake.auth_response.clone();
-            let auth_plugin_expect = self.shim.auth_plugin_for_username(&handshake.username);
-
-            // auth switch
-            if !auth_plugin_expect.is_empty()
-                && auth_response.is_empty()
-                && handshake.auth_plugin != auth_plugin_expect.as_bytes()
-            {
-                self.writer.write_all(&[0xfe])?;
-                self.writer.write_all(auth_plugin_expect.as_bytes())?;
-                self.writer.write_all(&[0x00])?;
-                self.writer.write_all(&scramble)?;
-                self.writer.write_all(&[0x00])?;
-
-                self.writer.flush()?;
-                {
-                    let (_seq, auth_response_data) = self.reader.next()?.ok_or_else(|| {
+        let (seq, handshake) = self.reader.next()?.ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "peer terminated connection",
+            )
+        })?;
+        let handshake = commands::client_handshake(&handshake)
+            .map_err(|e| match e {
+                nom::Err::Incomplete(_) => io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "client sent incomplete handshake",
+                ),
+                nom::Err::Failure(nom_error) | nom::Err::Error(nom_error) => {
+                    if let nom::error::ErrorKind::Eof = nom_error.code {
                         io::Error::new(
-                            io::ErrorKind::ConnectionAborted,
-                            "peer terminated connection",
+                            io::ErrorKind::UnexpectedEof,
+                            format!(
+                                "client did not complete handshake; got {:?}",
+                                nom_error.input
+                            ),
                         )
-                    })?;
-
-                    auth_response = auth_response_data.to_vec();
+                    } else {
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!(
+                                "bad client handshake; got {:?} ({:?})",
+                                nom_error.input, nom_error.code
+                            ),
+                        )
+                    }
                 }
-            }
+            })?
+            .1;
 
-            self.writer.set_seq(seq + 1);
+        self.writer.set_seq(seq + 1);
 
-            if !self.shim.authenticate(
-                auth_plugin_expect,
-                &handshake.username,
-                &scramble,
-                auth_response.as_slice(),
-            ) {
-                let err_msg = format!(
-                    "Authenticate failed, user: {:?}, auth_plugin: {:?}",
-                    String::from_utf8_lossy(&handshake.username),
-                    auth_plugin_expect,
-                );
-                writers::write_err(
-                    ErrorKind::ER_ACCESS_DENIED_NO_PASSWORD_ERROR,
-                    err_msg.as_bytes(),
-                    &mut self.writer,
-                )?;
-                self.writer.flush()?;
-                return Err(io::Error::new(io::ErrorKind::PermissionDenied, err_msg))?;
+        let mut auth_response = handshake.auth_response.to_vec();
+        let username = handshake.username.to_vec();
+        let auth_plugin = handshake.auth_plugin.to_vec();
+
+        drop(handshake);
+
+        let user_auth_plugin = self.shim.auth_plugin_for_user(&username);
+        // Start SwitchAuthRequest
+        if user_auth_plugin.as_bytes() != auth_plugin {
+            self.writer.write_all(&[0xfe])?;
+            self.writer.write_all(user_auth_plugin.as_bytes())?;
+            self.writer.write_all(&[0x00])?;
+            self.writer.write_all(&salt)?;
+            self.writer.write_all(&[0x00])?;
+
+            self.writer.flush()?;
+            {
+                let (seq, auth_response_data) = self.reader.next()?.ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::ConnectionAborted,
+                        "peer terminated connection",
+                    )
+                })?;
+                self.writer.set_seq(seq + 1);
+                auth_response = auth_response_data.to_vec();
             }
+        }
+
+        if !self
+            .shim
+            .authenticate(user_auth_plugin, &username, &salt, &auth_response)
+        {
+            let err_msg = format!(
+                "Access denied for user '{}'@'{}' (using password: YES)",
+                String::from_utf8_lossy(&username),
+                self.socket_addr.ip()
+            );
+            writers::write_err(
+                ErrorKind::ER_ACCESS_DENIED_ERROR,
+                err_msg.as_bytes(),
+                &mut self.writer,
+            )?;
+            self.writer.flush()?;
+            return Err(io::Error::new(io::ErrorKind::PermissionDenied, err_msg).into());
         }
 
         writers::write_ok_packet(&mut self.writer, 0, 0, StatusFlags::empty())?;

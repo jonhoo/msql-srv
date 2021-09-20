@@ -1,18 +1,20 @@
+use myc::io::ReadMysqlExt;
+
 use crate::myc::constants::{CapabilityFlags, Command as CommandByte};
 
 #[derive(Debug)]
-pub struct ClientHandshake {
+pub struct ClientHandshake<'a> {
     capabilities: CapabilityFlags,
     maxps: u32,
     collation: u16,
-    pub(crate) db: Option<Vec<u8>>,
-    pub(crate) username: Vec<u8>,
-    pub(crate) auth_response: Vec<u8>,
-    pub(crate) auth_plugin: Vec<u8>,
+    pub(crate) db: Option<&'a [u8]>,
+    pub(crate) username: &'a [u8],
+    pub(crate) auth_response: &'a [u8],
+    pub(crate) auth_plugin: &'a [u8],
 }
 
 #[allow(clippy::branches_sharing_code)]
-pub fn client_handshake(i: &[u8]) -> nom::IResult<&[u8], ClientHandshake> {
+pub fn client_handshake(i: &[u8]) -> nom::IResult<&[u8], ClientHandshake<'_>> {
     // mysql handshake protocol documentation
     // https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_connection_phase_packets_protocol_handshake_response.html
     let (i, cap) = nom::number::complete::le_u16(i)?;
@@ -35,7 +37,9 @@ pub fn client_handshake(i: &[u8]) -> nom::IResult<&[u8], ClientHandshake> {
 
         let (i, auth_response) =
             if capabilities.contains(CapabilityFlags::CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA) {
-                let (i, size) = read_length_encoded_number(i)?;
+                let mut i = i;
+                let size = i.read_lenenc_int().unwrap_or(0);
+
                 nom::bytes::complete::take(size)(i)?
             } else if capabilities.contains(CapabilityFlags::CLIENT_SECURE_CONNECTION) {
                 let (i, size) = nom::number::complete::le_u8(i)?;
@@ -69,10 +73,10 @@ pub fn client_handshake(i: &[u8]) -> nom::IResult<&[u8], ClientHandshake> {
                 capabilities: CapabilityFlags::from_bits_truncate(cap),
                 maxps,
                 collation: u16::from(collation[0]),
-                username: username.to_vec(),
-                db: db.map(|c| c.to_vec()),
-                auth_response: auth_response.to_vec(),
-                auth_plugin: auth_plugin.to_vec(),
+                username,
+                db,
+                auth_response,
+                auth_plugin,
             },
         ))
     } else {
@@ -102,28 +106,13 @@ pub fn client_handshake(i: &[u8]) -> nom::IResult<&[u8], ClientHandshake> {
                 capabilities: CapabilityFlags::from_bits_truncate(cap as u32),
                 maxps,
                 collation: 0,
-                username: username.to_vec(),
-                db: db.map(|c| c.to_vec()),
-                auth_response: auth_response.to_vec(),
-                auth_plugin: vec![],
+                username,
+                db,
+                auth_response,
+                auth_plugin: b"",
             },
         ))
     }
-}
-
-fn read_length_encoded_number(i: &[u8]) -> nom::IResult<&[u8], u64> {
-    let (i, b) = nom::number::complete::le_u8(i)?;
-    let size: usize = match b {
-        0xfb => return Ok((i, 0)),
-        0xfc => 2,
-        0xfd => 3,
-        0xfe => 8,
-        _ => return Ok((i, b as u64)),
-    };
-    let mut bytes = [0u8; 8];
-    let (i, b) = nom::bytes::complete::take(size)(i)?;
-    bytes[..size].copy_from_slice(b);
-    Ok((i, u64::from_le_bytes(bytes)))
 }
 
 #[derive(Debug, PartialEq, Eq)]

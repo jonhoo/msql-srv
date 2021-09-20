@@ -41,7 +41,6 @@ fn main() {
     let listener = net::TcpListener::bind("127.0.0.1:3306").unwrap();
 
     while let Ok((s, _)) = listener.accept() {
-        println!("{:?}", "got one socket");
         threads.push(thread::spawn(move || {
             MysqlIntermediary::run_on_tcp(Backend, s).unwrap();
         }));

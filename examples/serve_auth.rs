@@ -61,18 +61,6 @@ impl<W: io::Write> MysqlShim<W> for Backend {
         "5.1.10-alpha-msql-proxy"
     }
 
-    fn connect_id(&self) -> u32 {
-        u32::from_le_bytes([0x08, 0x00, 0x00, 0x00])
-    }
-
-    fn default_auth_plugin(&self) -> &str {
-        "mysql_native_password"
-    }
-
-    fn auth_plugin_for_username(&self, _user: &[u8]) -> &str {
-        "mysql_native_password"
-    }
-
     fn salt(&self) -> [u8; 20] {
         let bs = ";X,po_k}>o6^Wz!/kM}N".as_bytes();
         let mut scramble: [u8; 20] = [0; 20];
@@ -88,10 +76,9 @@ impl<W: io::Write> MysqlShim<W> for Backend {
 
 fn main() {
     let mut threads = Vec::new();
-    let listener = net::TcpListener::bind("127.0.0.1:3306").unwrap();
+    let listener = net::TcpListener::bind("0.0.0.0:3306").unwrap();
 
     while let Ok((s, _)) = listener.accept() {
-        println!("{:?}", "got one socket");
         threads.push(thread::spawn(move || {
             MysqlIntermediary::run_on_tcp(Backend, s).unwrap();
         }));
