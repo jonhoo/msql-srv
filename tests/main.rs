@@ -270,6 +270,44 @@ fn error_response() {
 }
 
 #[test]
+fn error_in_result_set_response() {
+    let err = (ErrorKind::ER_NO, "clearly not");
+    TestingShim::new(
+        move |_, w| {
+            let cols = &[Column {
+                table: String::new(),
+                column: "a".to_owned(),
+                coltype: myc::constants::ColumnType::MYSQL_TYPE_SHORT,
+                colflags: myc::constants::ColumnFlags::empty(),
+            }];
+            let mut w = w.start(cols)?;
+            w.write_col(1024)?;
+            w.finish_error(err.0, &err.1.as_bytes())
+        },
+        |_| unreachable!(),
+        |_, _, _| unreachable!(),
+        |_, _| unreachable!(),
+    )
+    .test(|db| {
+        let mut result = db.query_iter("SELECT a FROM foo").unwrap();
+        let row1 = result.next().unwrap().unwrap().get::<i16, _>(0).unwrap();
+        assert_eq!(row1, 1024);
+        if let mysql::Error::MySqlError(e) = result.by_ref().next().unwrap().unwrap_err() {
+            assert_eq!(
+                e,
+                mysql::error::MySqlError {
+                    state: String::from_utf8(err.0.sqlstate().to_vec()).unwrap(),
+                    message: err.1.to_owned(),
+                    code: err.0 as u16,
+                }
+            );
+        } else {
+            unreachable!()
+        }
+    })
+}
+
+#[test]
 fn empty_on_drop() {
     let cols = [Column {
         table: String::new(),
