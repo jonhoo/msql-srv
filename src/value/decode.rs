@@ -49,11 +49,7 @@ impl<'a> Value<'a> {
 
     /// Returns true if this is a NULL value
     pub fn is_null(&self) -> bool {
-        if let ValueInner::NULL = self.0 {
-            true
-        } else {
-            false
-        }
+        matches!(self.0, ValueInner::NULL)
     }
 
     pub(crate) fn parse_from(
@@ -142,7 +138,6 @@ impl<'a> ValueInner<'a> {
             }
             ColumnType::MYSQL_TYPE_FLOAT => {
                 let f = input.read_f32::<LittleEndian>()?;
-                println!("read {}", f);
                 Ok(ValueInner::Double(f64::from(f)))
             }
             ColumnType::MYSQL_TYPE_DOUBLE => {
@@ -251,9 +246,9 @@ use std::time::Duration;
 impl<'a> Into<Duration> for Value<'a> {
     fn into(self) -> Duration {
         if let ValueInner::Time(mut v) = self.0 {
-            assert!(v.len() == 0 || v.len() == 8 || v.len() == 12);
+            assert!(v.is_empty() || v.len() == 8 || v.len() == 12);
 
-            if v.len() == 0 {
+            if v.is_empty() {
                 return Duration::from_secs(0);
             }
 
@@ -287,7 +282,7 @@ impl<'a> Into<Duration> for Value<'a> {
 mod tests {
     use super::Value;
     use crate::myc;
-    use crate::myc::io::WriteMysqlExt;
+    use crate::value::utils::tests::WriteMysqlExt;
     use crate::{Column, ColumnFlags, ColumnType};
     use chrono::{self, TimeZone};
     use std::time;

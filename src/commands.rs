@@ -1,3 +1,5 @@
+use myc::io::ReadMysqlExt;
+
 use crate::myc::constants::{CapabilityFlags, Command as CommandByte};
 
 #[derive(Debug)]
@@ -5,26 +7,65 @@ pub struct ClientHandshake<'a> {
     capabilities: CapabilityFlags,
     maxps: u32,
     collation: u16,
-    username: &'a [u8],
+    pub(crate) db: Option<&'a [u8]>,
+    pub(crate) username: &'a [u8],
+    pub(crate) auth_response: &'a [u8],
+    pub(crate) auth_plugin: &'a [u8],
 }
 
+#[allow(clippy::branches_sharing_code)]
 pub fn client_handshake(i: &[u8]) -> nom::IResult<&[u8], ClientHandshake<'_>> {
     // mysql handshake protocol documentation
     // https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_connection_phase_packets_protocol_handshake_response.html
-
     let (i, cap) = nom::number::complete::le_u16(i)?;
 
-    if CapabilityFlags::from_bits_truncate(cap as u32).contains(CapabilityFlags::CLIENT_PROTOCOL_41)
-    {
+    let mut capabilities = CapabilityFlags::from_bits_truncate(cap as u32);
+    if capabilities.contains(CapabilityFlags::CLIENT_PROTOCOL_41) {
         // HandshakeResponse41
         let (i, cap2) = nom::number::complete::le_u16(i)?;
         let cap = (cap2 as u32) << 16 | cap as u32;
 
+        capabilities = CapabilityFlags::from_bits_truncate(cap as u32);
+
         let (i, maxps) = nom::number::complete::le_u32(i)?;
         let (i, collation) = nom::bytes::complete::take(1u8)(i)?;
+
         let (i, _) = nom::bytes::complete::take(23u8)(i)?;
+
         let (i, username) = nom::bytes::complete::take_until(&b"\0"[..])(i)?;
         let (i, _) = nom::bytes::complete::tag(b"\0")(i)?;
+
+        let (i, auth_response) =
+            if capabilities.contains(CapabilityFlags::CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA) {
+                let mut i = i;
+                let size = i.read_lenenc_int().unwrap_or(0);
+
+                nom::bytes::complete::take(size)(i)?
+            } else if capabilities.contains(CapabilityFlags::CLIENT_SECURE_CONNECTION) {
+                let (i, size) = nom::number::complete::le_u8(i)?;
+                nom::bytes::complete::take(size)(i)?
+            } else {
+                nom::bytes::complete::take_until(&b"\0"[..])(i)?
+            };
+
+        let (i, db) =
+            if capabilities.contains(CapabilityFlags::CLIENT_CONNECT_WITH_DB) && !i.is_empty() {
+                let (i, db) = nom::bytes::complete::take_until(&b"\0"[..])(i)?;
+                let (i, _) = nom::bytes::complete::tag(b"\0")(i)?;
+                (i, Some(db))
+            } else {
+                (i, None)
+            };
+
+        let (i, auth_plugin) =
+            if capabilities.contains(CapabilityFlags::CLIENT_PLUGIN_AUTH) && !i.is_empty() {
+                let (i, auth_plugin) = nom::bytes::complete::take_until(&b"\0"[..])(i)?;
+
+                let (i, _) = nom::bytes::complete::tag(b"\0")(i)?;
+                (i, auth_plugin)
+            } else {
+                (i, &b""[..])
+            };
 
         Ok((
             i,
@@ -33,6 +74,9 @@ pub fn client_handshake(i: &[u8]) -> nom::IResult<&[u8], ClientHandshake<'_>> {
                 maxps,
                 collation: u16::from(collation[0]),
                 username,
+                db,
+                auth_response,
+                auth_plugin,
             },
         ))
     } else {
@@ -41,6 +85,20 @@ pub fn client_handshake(i: &[u8]) -> nom::IResult<&[u8], ClientHandshake<'_>> {
         let (i, maxps2) = nom::number::complete::le_u8(i)?;
         let maxps = (maxps2 as u32) << 16 | maxps1 as u32;
         let (i, username) = nom::bytes::complete::take_until(&b"\0"[..])(i)?;
+        let (i, _) = nom::bytes::complete::tag(b"\0")(i)?;
+
+        let (i, auth_response, db) =
+            if capabilities.contains(CapabilityFlags::CLIENT_CONNECT_WITH_DB) {
+                let (i, auth_response) = nom::bytes::complete::tag(b"\0")(i)?;
+                let (i, _) = nom::bytes::complete::tag(b"\0")(i)?;
+
+                let (i, db) = nom::bytes::complete::tag(b"\0")(i)?;
+                let (i, _) = nom::bytes::complete::tag(b"\0")(i)?;
+
+                (i, auth_response, Some(db))
+            } else {
+                (&b""[..], i, None)
+            };
 
         Ok((
             i,
@@ -49,6 +107,9 @@ pub fn client_handshake(i: &[u8]) -> nom::IResult<&[u8], ClientHandshake<'_>> {
                 maxps,
                 collation: 0,
                 username,
+                db,
+                auth_response,
+                auth_plugin: b"",
             },
         ))
     }
@@ -142,10 +203,15 @@ mod tests {
     #[test]
     fn it_parses_handshake() {
         let data = &[
-            0x25, 0x00, 0x00, 0x01, 0x85, 0xa6, 0x3f, 0x20, 0x00, 0x00, 0x00, 0x01, 0x21, 0x00,
+            0x5b, 0x00, 0x00, 0x01, 0x8d, 0xa6, 0xff, 0x09, 0x00, 0x00, 0x00, 0x01, 0x21, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x6a, 0x6f, 0x6e, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x64, 0x65, 0x66, 0x61, 0x75, 0x6c,
+            0x74, 0x00, 0x14, 0xf7, 0xd1, 0x6c, 0xe9, 0x0d, 0x2f, 0x34, 0xb0, 0x2f, 0xd8, 0x1d,
+            0x18, 0xc7, 0xa4, 0xe8, 0x98, 0x97, 0x67, 0xeb, 0xad, 0x64, 0x65, 0x66, 0x61, 0x75,
+            0x6c, 0x74, 0x00, 0x6d, 0x79, 0x73, 0x71, 0x6c, 0x5f, 0x6e, 0x61, 0x74, 0x69, 0x76,
+            0x65, 0x5f, 0x70, 0x61, 0x73, 0x73, 0x77, 0x6f, 0x72, 0x64, 0x00,
         ];
+
         let r = Cursor::new(&data[..]);
         let mut pr = PacketReader::new(r);
         let (_, p) = pr.next().unwrap().unwrap();
@@ -157,14 +223,14 @@ mod tests {
         assert!(handshake
             .capabilities
             .contains(CapabilityFlags::CLIENT_MULTI_RESULTS));
-        assert!(!handshake
+        assert!(handshake
             .capabilities
             .contains(CapabilityFlags::CLIENT_CONNECT_WITH_DB));
-        assert!(!handshake
+        assert!(handshake
             .capabilities
             .contains(CapabilityFlags::CLIENT_DEPRECATE_EOF));
         assert_eq!(handshake.collation, UTF8_GENERAL_CI);
-        assert_eq!(handshake.username, &b"jon"[..]);
+        assert_eq!(handshake.username, &b"default"[..]);
         assert_eq!(handshake.maxps, 16777216);
     }
 
