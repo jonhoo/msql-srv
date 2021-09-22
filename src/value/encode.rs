@@ -661,9 +661,9 @@ impl ToMysqlValue for myc::value::Value {
 #[allow(unused_imports)]
 mod tests {
     use super::ToMysqlValue;
+    use crate::myc::proto::{MyDeserialize, MySerialize};
     use crate::myc::value;
     use crate::myc::value::convert::from_value;
-    use crate::value::utils::tests::*;
     use crate::{Column, ColumnFlags, ColumnType};
     use chrono::{self, TimeZone};
     use std::time;
@@ -677,10 +677,19 @@ mod tests {
                 fn $name() {
                     let mut data = Vec::new();
                     let v: $t = $v;
-                    v.to_mysql_text(&mut data).unwrap();
+                    let value = myc::value::Value::from(v);
+                    value.serialize(&mut data);
+
+                    let mut buf = myc::io::ParseBuf(&data);
+
                     assert_eq!(
-                        from_value::<$t>(read_text_value(&mut &data[..]).unwrap()),
-                        v
+                        myc::value::ValueDeserializer::<myc::value::TextValue>::deserialize(
+                            (),
+                            &mut buf,
+                        )
+                        .unwrap()
+                        .0,
+                        value,
                     );
                 }
             };
@@ -749,10 +758,18 @@ mod tests {
                     }
 
                     let v: $t = $v;
-                    v.to_mysql_bin(&mut data, &col).unwrap();
+                    let value = myc::value::Value::from(v);
+                    value.serialize(&mut data);
+
+                    let mut buf = myc::io::ParseBuf(&data);
                     assert_eq!(
-                        from_value::<$t>(read_bin_value(&mut &data[..], $ct, !$sig).unwrap()),
-                        v
+                        myc::value::ValueDeserializer::<myc::value::BinValue>::deserialize(
+                            (col.coltype, col.colflags),
+                            &mut buf,
+                        )
+                        .unwrap()
+                        .0,
+                        value
                     );
                 }
             };

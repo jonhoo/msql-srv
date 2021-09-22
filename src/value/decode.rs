@@ -1,6 +1,7 @@
 use crate::myc::constants::ColumnType;
 use crate::myc::io::ReadMysqlExt;
-use byteorder::{LittleEndian, ReadBytesExt};
+use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+use mysql_common::io::WriteMysqlExt;
 use std::io;
 
 /// MySQL value as provided when executing prepared statements.
@@ -283,7 +284,7 @@ impl<'a> Into<Duration> for Value<'a> {
 mod tests {
     use super::Value;
     use crate::myc;
-    use crate::value::utils::tests::WriteMysqlExt;
+    use crate::myc::proto::{MyDeserialize, MySerialize};
     use crate::{Column, ColumnFlags, ColumnType};
     use chrono::{self, TimeZone};
     use std::time;
@@ -308,11 +309,19 @@ mod tests {
                 }
 
                 let v: $t = $v;
-                data.write_bin_value(&myc::value::Value::from(v)).unwrap();
-                assert_eq!(
-                    Into::<$t>::into(Value::parse_from(&mut &data[..], $ct, !$sig).unwrap()),
-                    v
-                );
+                let value = myc::value::Value::from(v);
+                value.serialize(&mut data);
+
+                let mut buf = myc::io::ParseBuf(&data);
+
+                let v = myc::value::ValueDeserializer::<myc::value::BinValue>::deserialize(
+                    (col.coltype, col.colflags),
+                    &mut buf,
+                )
+                .unwrap()
+                .0;
+
+                assert_eq!(value, v);
             }
         };
     }
