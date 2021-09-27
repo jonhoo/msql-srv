@@ -28,7 +28,7 @@ mysql_common = "0.22"
 byteorder = "1"
 chrono = "0.4"
 time = "0.2.25"
-rustls = "0.20.0-beta2"
+rustls = "0.20.0"
 rustls-pemfile = "0.2.1"
 
 [dev-dependencies]
