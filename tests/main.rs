@@ -15,6 +15,7 @@ use rustls::ServerConfig;
 use std::error::Error;
 use std::io;
 use std::net;
+use std::sync::Arc;
 use std::thread;
 
 use msql_srv::{
@@ -29,7 +30,7 @@ struct TestingShim<Q, P, E, I> {
     on_p: P,
     on_e: E,
     on_i: I,
-    server_tls: Option<rustls::ServerConfig>,
+    server_tls: Option<Arc<rustls::ServerConfig>>,
     client_tls: Option<SslOpts>,
 }
 
@@ -74,8 +75,8 @@ where
         (self.on_q)(query, results)
     }
 
-    fn tls_config(&self) -> Option<&rustls::ServerConfig> {
-        self.server_tls.as_ref()
+    fn tls_config(&self) -> Option<Arc<rustls::ServerConfig>> {
+        self.server_tls.as_ref().map(Arc::clone)
     }
 }
 
@@ -114,7 +115,7 @@ where
     fn with_server_tls(mut self) -> Self {
         let cert = generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
 
-        self.server_tls = Some(
+        self.server_tls = Some(Arc::new(
             ServerConfig::builder()
                 .with_safe_defaults()
                 .with_no_client_auth()
@@ -123,7 +124,7 @@ where
                     PrivateKey(cert.get_key_pair().serialize_der()),
                 )
                 .unwrap(),
-        );
+        ));
 
         self
     }

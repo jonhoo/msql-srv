@@ -100,6 +100,7 @@ use std::io;
 use std::io::prelude::*;
 use std::iter;
 use std::net;
+use std::sync::Arc;
 
 use myc::constants::CapabilityFlags;
 
@@ -189,7 +190,7 @@ pub trait MysqlShim<W: Read + Write> {
     }
 
     /// Provides the TLS configuration, if we want to support TLS.
-    fn tls_config(&self) -> Option<&rustls::ServerConfig> {
+    fn tls_config(&self) -> Option<Arc<rustls::ServerConfig>> {
         None
     }
 }
@@ -298,7 +299,7 @@ impl<B: MysqlShim<RW>, RW: Read + Write> MysqlIntermediary<B, RW> {
                     )
                 })?;
 
-                self.rw.switch_to_tls(&config)?;
+                self.rw.switch_to_tls(config)?;
 
                 let (seq, handshake) = self.rw.next()?.ok_or_else(|| {
                     io::Error::new(

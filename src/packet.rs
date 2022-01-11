@@ -1,5 +1,5 @@
 use byteorder::{ByteOrder, LittleEndian};
-use rustls::ServerConnection;
+use rustls::{ServerConfig, ServerConnection};
 use std::io;
 use std::io::prelude::*;
 
@@ -68,7 +68,7 @@ impl<W: Read + Write> PacketConn<W> {
         self.maybe_end_packet()
     }
 
-    pub fn switch_to_tls(&mut self, config: &rustls::ServerConfig) -> io::Result<()> {
+    pub fn switch_to_tls(&mut self, config: Arc<ServerConfig>) -> io::Result<()> {
         assert!(self.remaining() == 0); // otherwise we've read ahead into the TLS handshake and will be in trouble.
 
         self.rw.switch_to_tls(config)
@@ -171,6 +171,7 @@ impl AsRef<[u8]> for Packet {
 }
 
 use std::ops::Deref;
+use std::sync::Arc;
 
 use crate::tls;
 impl Deref for Packet {
@@ -250,7 +251,7 @@ impl<T: Read + Write> SwitchableConn<T> {
         SwitchableConn(Some(EitherConn::Plain(rw)))
     }
 
-    pub fn switch_to_tls(&mut self, config: &rustls::ServerConfig) -> io::Result<()> {
+    pub fn switch_to_tls(&mut self, config: Arc<ServerConfig>) -> io::Result<()> {
         let replacement = match self.0.take() {
             Some(EitherConn::Plain(plain)) => {
                 Ok(EitherConn::TLS(tls::create_stream(plain, config)?))
