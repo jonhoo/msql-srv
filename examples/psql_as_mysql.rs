@@ -139,7 +139,7 @@ impl<W: io::Write> MysqlShim<W> for Postgres {
                 use std::mem;
                 let params: Vec<_> = stmt
                     .params()
-                    .into_iter()
+                    .iter()
                     .map(|t| {
                         let ct = p2mt(t);
                         Column {
@@ -152,7 +152,7 @@ impl<W: io::Write> MysqlShim<W> for Postgres {
                     .collect();
                 let columns: Vec<_> = stmt
                     .columns()
-                    .into_iter()
+                    .iter()
                     .map(|c| {
                         let t = c.type_();
                         let ct = p2mt(t);
@@ -268,10 +268,10 @@ fn answer_rows<W: io::Write>(
 ) -> Result<(), Error> {
     match rows {
         Ok(rows) => {
-            if let Some(first) = rows.iter().next() {
+            if let Some(first) = rows.get(0) {
                 let cols: Vec<_> = first
                     .columns()
-                    .into_iter()
+                    .iter()
                     .map(|c| {
                         let t = c.type_();
                         let ct = p2mt(t);
