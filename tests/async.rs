@@ -103,7 +103,7 @@ where
         });
 
         tokio::runtime::current_thread::block_on_all(
-            mysql_async::Conn::new(format!("mysql://127.0.0.1:{}", port)).and_then(|conn| c(conn)),
+            mysql_async::Conn::new(format!("mysql://127.0.0.1:{}", port)).and_then(c),
         )
         .unwrap();
 
@@ -664,7 +664,7 @@ fn prepared_empty() {
         coltype: myc::constants::ColumnType::MYSQL_TYPE_SHORT,
         colflags: myc::constants::ColumnFlags::empty(),
     }];
-    let cols2 = cols.clone();
+    let cols2 = cols;
     let params = vec![Column {
         table: String::new(),
         column: "c".to_owned(),

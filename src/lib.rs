@@ -378,7 +378,7 @@ impl<B: MysqlShim<RW>, RW: Read + Write> MysqlIntermediary<B, RW> {
                         let schema = ::std::str::from_utf8(&q[b"USE ".len()..])
                             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
                         let schema = schema.trim().trim_end_matches(';').trim_matches('`');
-                        self.shim.on_init(&schema, w)?;
+                        self.shim.on_init(schema, w)?;
                     } else {
                         let w = QueryResultWriter::new(&mut self.rw, false);
                         self.shim.on_query(

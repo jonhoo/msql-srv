@@ -136,7 +136,7 @@ where
 
     fn test<C>(self, c: C)
     where
-        C: FnOnce(&mut mysql::Conn) -> (),
+        C: FnOnce(&mut mysql::Conn),
     {
         self.test_with_result(c).unwrap()
     }
@@ -854,7 +854,7 @@ fn prepared_empty() {
         coltype: myc::constants::ColumnType::MYSQL_TYPE_SHORT,
         colflags: myc::constants::ColumnFlags::empty(),
     }];
-    let cols2 = cols.clone();
+    let cols2 = cols;
     let params = vec![Column {
         table: String::new(),
         column: "c".to_owned(),
