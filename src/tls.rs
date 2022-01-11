@@ -13,7 +13,7 @@ pub fn create_stream<T: Read + Write + Sized>(
     Ok(stream)
 }
 
-pub(crate) struct SwitchableConn<T: Read + Write>(Option<EitherConn<T>>);
+pub(crate) struct SwitchableConn<T: Read + Write>(pub Option<EitherConn<T>>);
 
 pub(crate) enum EitherConn<T: Read + Write> {
     Plain(T),
