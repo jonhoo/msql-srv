@@ -1,4 +1,3 @@
-use crate::myc;
 use crate::myc::constants::{ColumnFlags, ColumnType};
 use crate::myc::io::WriteMysqlExt;
 use crate::Column;
@@ -667,12 +666,19 @@ mod tests {
     use super::ToMysqlValue;
     use crate::myc::value;
     use crate::myc::value::convert::from_value;
+    use crate::myc::value::Value;
     use crate::{Column, ColumnFlags, ColumnType};
     use chrono::{self, TimeZone};
     use std::time;
 
     mod roundtrip_text {
         use super::*;
+
+        use myc::{
+            io::ParseBuf,
+            proto::MyDeserialize,
+            value::{convert::FromValue, TextValue, ValueDeserializer},
+        };
 
         macro_rules! rt {
             ($name:ident, $t:ty, $v:expr) => {
@@ -681,8 +687,13 @@ mod tests {
                     let mut data = Vec::new();
                     let v: $t = $v;
                     v.to_mysql_text(&mut data).unwrap();
+                    let mut pb = ParseBuf(&mut data[..]);
                     assert_eq!(
-                        from_value::<$t>(value::read_text_value(&mut &data[..]).unwrap()),
+                        <$t>::from_value(
+                            ValueDeserializer::<TextValue>::deserialize((), &mut pb)
+                                .unwrap()
+                                .0,
+                        ),
                         v
                     );
                 }
@@ -732,6 +743,12 @@ mod tests {
     mod roundtrip_bin {
         use super::*;
 
+        use myc::{
+            io::ParseBuf,
+            proto::MyDeserialize,
+            value::{convert::FromValue, BinValue, ValueDeserializer},
+        };
+
         macro_rules! rt {
             ($name:ident, $t:ty, $v:expr, $ct:expr) => {
                 rt!($name, $t, $v, $ct, false);
@@ -753,9 +770,22 @@ mod tests {
 
                     let v: $t = $v;
                     v.to_mysql_bin(&mut data, &col).unwrap();
+                    let mut pb = ParseBuf(&mut data[..]);
                     assert_eq!(
-                        from_value::<$t>(
-                            value::read_bin_value(&mut &data[..], $ct, !$sig).unwrap()
+                        <$t>::from_value(
+                            ValueDeserializer::<BinValue>::deserialize(
+                                (
+                                    $ct,
+                                    if $sig {
+                                        ColumnFlags::empty()
+                                    } else {
+                                        ColumnFlags::UNSIGNED_FLAG
+                                    }
+                                ),
+                                &mut pb
+                            )
+                            .unwrap()
+                            .0,
                         ),
                         v
                     );
