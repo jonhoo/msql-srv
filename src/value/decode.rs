@@ -49,11 +49,7 @@ impl<'a> Value<'a> {
 
     /// Returns true if this is a NULL value
     pub fn is_null(&self) -> bool {
-        if let ValueInner::NULL = self.0 {
-            true
-        } else {
-            false
-        }
+        matches!(self.0, ValueInner::NULL)
     }
 
     pub(crate) fn parse_from(
@@ -169,12 +165,12 @@ impl<'a> ValueInner<'a> {
     }
 }
 
-// NOTE: these should all be TryInto
+// NOTE: these should all be TryFrom
 macro_rules! impl_into {
     ($t:ty, $($variant:path),*) => {
-        impl<'a> Into<$t> for Value<'a> {
-            fn into(self) -> $t {
-                match self.0 {
+        impl<'a> From<Value<'a>> for $t {
+            fn from(val: Value<'a>) -> Self {
+                match val.0 {
                     $($variant(v) => v as $t),*,
                     v => panic!(concat!("invalid type conversion from {:?} to ", stringify!($t)), v)
                 }
@@ -195,20 +191,20 @@ impl_into!(f32, ValueInner::Double);
 impl_into!(f64, ValueInner::Double);
 impl_into!(&'a [u8], ValueInner::Bytes);
 
-impl<'a> Into<&'a str> for Value<'a> {
-    fn into(self) -> &'a str {
-        if let ValueInner::Bytes(v) = self.0 {
+impl<'a> From<Value<'a>> for &'a str {
+    fn from(val: Value<'a>) -> Self {
+        if let ValueInner::Bytes(v) = val.0 {
             ::std::str::from_utf8(v).unwrap()
         } else {
-            panic!("invalid type conversion from {:?} to string", self)
+            panic!("invalid type conversion from {:?} to string", val)
         }
     }
 }
 
 use chrono::{NaiveDate, NaiveDateTime};
-impl<'a> Into<NaiveDate> for Value<'a> {
-    fn into(self) -> NaiveDate {
-        if let ValueInner::Date(mut v) = self.0 {
+impl<'a> From<Value<'a>> for NaiveDate {
+    fn from(val: Value<'a>) -> Self {
+        if let ValueInner::Date(mut v) = val.0 {
             assert_eq!(v.len(), 4);
             NaiveDate::from_ymd(
                 i32::from(v.read_u16::<LittleEndian>().unwrap()),
@@ -216,14 +212,14 @@ impl<'a> Into<NaiveDate> for Value<'a> {
                 u32::from(v.read_u8().unwrap()),
             )
         } else {
-            panic!("invalid type conversion from {:?} to date", self)
+            panic!("invalid type conversion from {:?} to date", val)
         }
     }
 }
 
-impl<'a> Into<NaiveDateTime> for Value<'a> {
-    fn into(self) -> NaiveDateTime {
-        if let ValueInner::Datetime(mut v) = self.0 {
+impl<'a> From<Value<'a>> for NaiveDateTime {
+    fn from(val: Value<'a>) -> Self {
+        if let ValueInner::Datetime(mut v) = val.0 {
             assert!(v.len() == 7 || v.len() == 11);
             let d = NaiveDate::from_ymd(
                 i32::from(v.read_u16::<LittleEndian>().unwrap()),
@@ -242,18 +238,18 @@ impl<'a> Into<NaiveDateTime> for Value<'a> {
                 d.and_hms(h, m, s)
             }
         } else {
-            panic!("invalid type conversion from {:?} to datetime", self)
+            panic!("invalid type conversion from {:?} to datetime", val)
         }
     }
 }
 
 use std::time::Duration;
-impl<'a> Into<Duration> for Value<'a> {
-    fn into(self) -> Duration {
-        if let ValueInner::Time(mut v) = self.0 {
-            assert!(v.len() == 0 || v.len() == 8 || v.len() == 12);
+impl<'a> From<Value<'a>> for Duration {
+    fn from(val: Value<'a>) -> Self {
+        if let ValueInner::Time(mut v) = val.0 {
+            assert!(v.is_empty() || v.len() == 8 || v.len() == 12);
 
-            if v.len() == 0 {
+            if v.is_empty() {
                 return Duration::from_secs(0);
             }
 
@@ -277,7 +273,7 @@ impl<'a> Into<Duration> for Value<'a> {
                 micros * 1_000,
             )
         } else {
-            panic!("invalid type conversion from {:?} to datetime", self)
+            panic!("invalid type conversion from {:?} to datetime", val)
         }
     }
 }

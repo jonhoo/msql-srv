@@ -1,6 +1,7 @@
 use crate::myc::constants::{CapabilityFlags, Command as CommandByte};
 
 #[derive(Debug)]
+#[allow(dead_code)] // The fields here are read, but only in tests. This keeps clippy quiet.
 pub struct ClientHandshake<'a> {
     capabilities: CapabilityFlags,
     maxps: u32,
