@@ -69,7 +69,7 @@ impl<W: Read + Write> PacketConn<W> {
     }
 
     pub fn switch_to_tls(&mut self, config: Arc<ServerConfig>) -> io::Result<()> {
-        assert!(self.remaining() == 0); // otherwise we've read ahead into the TLS handshake and will be in trouble.
+        assert_eq!(self.remaining(), 0); // otherwise we've read ahead into the TLS handshake and will be in trouble.
 
         self.rw.switch_to_tls(config)
     }
