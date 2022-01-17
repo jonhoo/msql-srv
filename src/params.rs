@@ -1,6 +1,7 @@
 use crate::myc;
 use crate::{StatementData, Value};
 use std::collections::HashMap;
+use std::convert::TryFrom;
 
 /// A `ParamParser` decodes query parameters included in a client's `EXECUTE` command given
 /// type information for the expected parameters.
@@ -72,7 +73,10 @@ impl<'a> Iterator for Params<'a> {
                 self.bound_types.clear();
                 for i in 0..self.params as usize {
                     self.bound_types.push((
-                        myc::constants::ColumnType::from(typmap[2 * i as usize]),
+                        myc::constants::ColumnType::try_from(typmap[2 * i as usize])
+                            .unwrap_or_else(|e| {
+                                panic!("bad column type 0x{:x}: {}", typmap[2 * i as usize], e)
+                            }),
                         (typmap[2 * i as usize + 1] & 128) != 0,
                     ));
                 }
