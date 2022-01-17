@@ -209,7 +209,8 @@ fn it_connects_tls_both() {
 #[test]
 fn it_does_not_connect_tls_client_only() {
     // Client requesting tls fails as expected when server does not support it.
-    match TestingShim::new(
+
+    let e = TestingShim::new(
         |_, _| unreachable!(),
         |_| unreachable!(),
         |_, _, _| unreachable!(),
@@ -217,17 +218,16 @@ fn it_does_not_connect_tls_client_only() {
     )
     .with_client_tls()
     .test_with_result(|_| {})
-    {
-        Ok(()) => {
-            panic!("client should not have connected")
-        }
-        Err(e) => match e.downcast_ref::<mysql::Error>() {
-            Some(mysql::Error::DriverError(DriverError::TlsNotSupported)) => {
-                // this is what we expect.
-            }
-            _ => panic!("unexpected error {}", e),
-        },
-    }
+    .expect_err("client should not have connected");
+
+    assert!(
+        matches!(
+            e.downcast_ref::<mysql::Error>(),
+            Some(mysql::Error::DriverError(DriverError::TlsNotSupported))
+        ),
+        "unexpected error {:?}",
+        e
+    );
 }
 
 #[test]
