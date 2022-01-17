@@ -214,9 +214,9 @@ fn packet(i: &[u8]) -> nom::IResult<&[u8], (u8, Packet)> {
     )(i)
 }
 
-pub struct SwitchableConn<T: Read + Write>(Option<EitherConn<T>>);
+pub(crate) struct SwitchableConn<T: Read + Write>(Option<EitherConn<T>>);
 
-pub enum EitherConn<T: Read + Write> {
+pub(crate) enum EitherConn<T: Read + Write> {
     Plain(T),
     TLS(rustls::StreamOwned<ServerConnection, T>),
 }
