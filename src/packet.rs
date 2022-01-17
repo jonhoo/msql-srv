@@ -1,12 +1,16 @@
 use byteorder::{ByteOrder, LittleEndian};
-use rustls::{ServerConfig, ServerConnection};
+#[cfg(feature = "tls")]
+use rustls::ServerConfig;
 use std::io;
 use std::io::prelude::*;
 
 const U24_MAX: usize = 16_777_215;
 
 pub struct PacketConn<RW: Read + Write> {
-    rw: SwitchableConn<RW>,
+    #[cfg(feature = "tls")]
+    rw: tls::SwitchableConn<RW>,
+    #[cfg(not(feature = "tls"))]
+    rw: RW,
 
     // read variables
     bytes: Vec<u8>,
@@ -38,6 +42,9 @@ impl<W: Read + Write> Write for PacketConn<W> {
 
 impl<RW: Read + Write> PacketConn<RW> {
     pub fn new(rw: RW) -> Self {
+        #[cfg(feature = "tls")]
+        let rw = tls::SwitchableConn::new(rw);
+
         PacketConn {
             bytes: Vec::new(),
             start: 0,
@@ -45,7 +52,7 @@ impl<RW: Read + Write> PacketConn<RW> {
 
             to_write: vec![0, 0, 0, 0],
             seq: 0,
-            rw: SwitchableConn::new(rw),
+            rw,
         }
     }
 }
@@ -68,8 +75,9 @@ impl<W: Read + Write> PacketConn<W> {
         self.maybe_end_packet()
     }
 
-    pub fn switch_to_tls(&mut self, config: Arc<ServerConfig>) -> io::Result<()> {
-        assert_eq!(self.remaining(), 0); // otherwise we've read ahead into the TLS handshake and will be in trouble.
+    #[cfg(feature = "tls")]
+    pub fn switch_to_tls(&mut self, config: std::sync::Arc<ServerConfig>) -> io::Result<()> {
+        assert_eq!(self.remaining, 0); // otherwise we've read ahead into the TLS handshake and will be in trouble.
 
         self.rw.switch_to_tls(config)
     }
@@ -134,10 +142,6 @@ impl<R: Read + Write> PacketConn<R> {
             }
         }
     }
-
-    pub fn remaining(&self) -> usize {
-        self.remaining
-    }
 }
 
 pub fn fullpacket(i: &[u8]) -> nom::IResult<&[u8], (u8, &[u8])> {
@@ -171,9 +175,10 @@ impl AsRef<[u8]> for Packet {
 }
 
 use std::ops::Deref;
-use std::sync::Arc;
 
+#[cfg(feature = "tls")]
 use crate::tls;
+
 impl Deref for Packet {
     type Target = [u8];
     fn deref(&self) -> &Self::Target {
@@ -212,60 +217,6 @@ fn packet(i: &[u8]) -> nom::IResult<&[u8], (u8, Packet)> {
             (seq, pkt)
         },
     )(i)
-}
-
-pub(crate) struct SwitchableConn<T: Read + Write>(Option<EitherConn<T>>);
-
-pub(crate) enum EitherConn<T: Read + Write> {
-    Plain(T),
-    TLS(rustls::StreamOwned<ServerConnection, T>),
-}
-
-impl<T: Read + Write> Read for SwitchableConn<T> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        match &mut self.0.as_mut().unwrap() {
-            EitherConn::Plain(p) => p.read(buf),
-            EitherConn::TLS(t) => t.read(buf),
-        }
-    }
-}
-
-impl<T: Read + Write> Write for SwitchableConn<T> {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        match &mut self.0.as_mut().unwrap() {
-            EitherConn::Plain(p) => p.write(buf),
-            EitherConn::TLS(t) => t.write(buf),
-        }
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        match &mut self.0.as_mut().unwrap() {
-            EitherConn::Plain(p) => p.flush(),
-            EitherConn::TLS(t) => t.flush(),
-        }
-    }
-}
-
-impl<T: Read + Write> SwitchableConn<T> {
-    pub fn new(rw: T) -> SwitchableConn<T> {
-        SwitchableConn(Some(EitherConn::Plain(rw)))
-    }
-
-    pub fn switch_to_tls(&mut self, config: Arc<ServerConfig>) -> io::Result<()> {
-        let replacement = match self.0.take() {
-            Some(EitherConn::Plain(plain)) => {
-                Ok(EitherConn::TLS(tls::create_stream(plain, config)?))
-            }
-            Some(EitherConn::TLS(_)) => Err(io::Error::new(
-                io::ErrorKind::Other,
-                "tls variant found when plain was expected",
-            )),
-            None => unreachable!(),
-        }?;
-
-        self.0 = Some(replacement);
-        Ok(())
-    }
 }
 
 #[cfg(test)]

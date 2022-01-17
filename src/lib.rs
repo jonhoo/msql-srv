@@ -100,7 +100,6 @@ use std::io;
 use std::io::prelude::*;
 use std::iter;
 use std::net;
-use std::sync::Arc;
 
 use myc::constants::CapabilityFlags;
 
@@ -111,6 +110,7 @@ mod errorcodes;
 mod packet;
 mod params;
 mod resultset;
+#[cfg(feature = "tls")]
 mod tls;
 mod value;
 mod writers;
@@ -190,7 +190,8 @@ pub trait MysqlShim<W: Read + Write> {
     }
 
     /// Provides the TLS configuration, if we want to support TLS.
-    fn tls_config(&self) -> Option<Arc<rustls::ServerConfig>> {
+    #[cfg(feature = "tls")]
+    fn tls_config(&self) -> Option<std::sync::Arc<rustls::ServerConfig>> {
         None
     }
 }
@@ -238,6 +239,7 @@ impl<B: MysqlShim<RW>, RW: Read + Write> MysqlIntermediary<B, RW> {
     }
 
     fn init(&mut self) -> Result<(), B::Error> {
+        #[cfg(feature = "tls")]
         let tls_conf = self.shim.tls_config();
 
         self.rw.write_all(&[10])?; // protocol 10
@@ -248,6 +250,7 @@ impl<B: MysqlShim<RW>, RW: Read + Write> MysqlIntermediary<B, RW> {
         self.rw.write_all(&[0x08, 0x00, 0x00, 0x00])?; // TODO: connection ID
         self.rw.write_all(&b";X,po_k}\0"[..])?; // auth seed
         let capabilities = &mut [0x00, 0x42]; // 4.1 proto
+        #[cfg(feature = "tls")]
         if tls_conf.is_some() {
             capabilities[1] |= 0x08; // SSL support flag
         }
@@ -293,6 +296,16 @@ impl<B: MysqlShim<RW>, RW: Read + Write> MysqlIntermediary<B, RW> {
 
             self.rw.set_seq(seq + 1);
 
+            #[cfg(not(feature = "tls"))]
+            if handshake.capabilities.contains(CapabilityFlags::CLIENT_SSL) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "client requested SSL despite us not advertising support for it",
+                )
+                .into());
+            }
+
+            #[cfg(feature = "tls")]
             if handshake.capabilities.contains(CapabilityFlags::CLIENT_SSL) {
                 let config = tls_conf.ok_or_else(|| {
                     io::Error::new(

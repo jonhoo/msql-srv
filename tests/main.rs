@@ -8,14 +8,11 @@ use mysql::prelude::*;
 use mysql::DriverError;
 use mysql::OptsBuilder;
 use mysql::SslOpts;
-use rcgen::generate_simple_self_signed;
-use rustls::Certificate;
-use rustls::PrivateKey;
-use rustls::ServerConfig;
+#[cfg(feature = "tls")]
+use rustls::{Certificate, PrivateKey, ServerConfig};
 use std::error::Error;
 use std::io;
 use std::net;
-use std::sync::Arc;
 use std::thread;
 
 use msql_srv::{
@@ -30,7 +27,8 @@ struct TestingShim<Q, P, E, I> {
     on_p: P,
     on_e: E,
     on_i: I,
-    server_tls: Option<Arc<rustls::ServerConfig>>,
+    #[cfg(feature = "tls")]
+    server_tls: Option<std::sync::Arc<rustls::ServerConfig>>,
     client_tls: Option<SslOpts>,
 }
 
@@ -75,8 +73,9 @@ where
         (self.on_q)(query, results)
     }
 
-    fn tls_config(&self) -> Option<Arc<rustls::ServerConfig>> {
-        self.server_tls.as_ref().map(Arc::clone)
+    #[cfg(feature = "tls")]
+    fn tls_config(&self) -> Option<std::sync::Arc<rustls::ServerConfig>> {
+        self.server_tls.as_ref().map(std::sync::Arc::clone)
     }
 }
 
@@ -97,6 +96,7 @@ where
             on_p,
             on_e,
             on_i,
+            #[cfg(feature = "tls")]
             server_tls: None,
             client_tls: None,
         }
@@ -112,10 +112,11 @@ where
         self
     }
 
+    #[cfg(feature = "tls")]
     fn with_server_tls(mut self) -> Self {
-        let cert = generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
 
-        self.server_tls = Some(Arc::new(
+        self.server_tls = Some(std::sync::Arc::new(
             ServerConfig::builder()
                 .with_safe_defaults()
                 .with_no_client_auth()
@@ -180,6 +181,8 @@ fn it_connects() {
 }
 
 #[test]
+#[cfg(feature = "tls")]
+
 fn it_connects_tls_server_only() {
     // Client can connect ok without SSL when SSL is enabled on the server.
     TestingShim::new(
@@ -193,6 +196,8 @@ fn it_connects_tls_server_only() {
 }
 
 #[test]
+#[cfg(feature = "tls")]
+
 fn it_connects_tls_both() {
     // SSL connection when ssl enabled on server and used by client
     TestingShim::new(
