@@ -238,6 +238,8 @@ impl<B: MysqlShim<RW>, RW: Read + Write> MysqlIntermediary<B, RW> {
     }
 
     fn init(&mut self) -> Result<(), B::Error> {
+        let tls_conf = self.shim.tls_config();
+
         self.rw.write_all(&[10])?; // protocol 10
 
         // 5.1.10 because that's what Ruby's ActiveRecord requires
@@ -246,7 +248,7 @@ impl<B: MysqlShim<RW>, RW: Read + Write> MysqlIntermediary<B, RW> {
         self.rw.write_all(&[0x08, 0x00, 0x00, 0x00])?; // TODO: connection ID
         self.rw.write_all(&b";X,po_k}\0"[..])?; // auth seed
         let capabilities = &mut [0x00, 0x42]; // 4.1 proto
-        if self.shim.tls_config().is_some() {
+        if tls_conf.is_some() {
             capabilities[1] |= 0x08; // SSL support flag
         }
         self.rw.write_all(capabilities)?;
@@ -292,7 +294,7 @@ impl<B: MysqlShim<RW>, RW: Read + Write> MysqlIntermediary<B, RW> {
             self.rw.set_seq(seq + 1);
 
             if handshake.capabilities.contains(CapabilityFlags::CLIENT_SSL) {
-                let config = self.shim.tls_config().ok_or_else(|| {
+                let config = tls_conf.ok_or_else(|| {
                     io::Error::new(
                         io::ErrorKind::InvalidData,
                         "client requested SSL despite us not advertising support for it",
