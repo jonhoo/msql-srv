@@ -74,8 +74,8 @@ impl<'a> Iterator for Params<'a> {
                 for i in 0..self.params as usize {
                     self.bound_types.push((
                         myc::constants::ColumnType::try_from(typmap[2 * i as usize])
-                            .unwrap_or_else(|_| {
-                                panic!("got unsupported column type 0x{:x}", typmap[2 * i as usize])
+                            .unwrap_or_else(|e| {
+                                panic!("bad column type 0x{:x}: {}", typmap[2 * i as usize], e)
                             }),
                         (typmap[2 * i as usize + 1] & 128) != 0,
                     ));
