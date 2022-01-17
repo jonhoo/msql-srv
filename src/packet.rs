@@ -124,8 +124,8 @@ impl<R: Read + Write> PacketConn<R> {
             let end = self.bytes.len();
             self.bytes.resize(std::cmp::max(4096, end * 2), 0);
             let read = {
-                let mut buf = &mut self.bytes[end..];
-                self.rw.read(&mut buf)?
+                let buf = &mut self.bytes[end..];
+                self.rw.read(buf)?
             };
             self.bytes.truncate(end + read);
             self.remaining = self.bytes.len();
