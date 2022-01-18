@@ -161,6 +161,7 @@ where
             .ssl_opts(client_tls);
 
         let mut db = mysql::Conn::new(opts)?;
+
         c(&mut db);
         drop(db);
         jh.join().unwrap().unwrap();
