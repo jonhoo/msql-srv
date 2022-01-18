@@ -9,7 +9,7 @@ pub struct ClientHandshake<'a> {
     username: Option<&'a [u8]>,
 }
 
-pub fn client_handshake(i: &[u8]) -> nom::IResult<&[u8], ClientHandshake<'_>> {
+pub fn client_handshake(i: &[u8], after_tls: bool) -> nom::IResult<&[u8], ClientHandshake<'_>> {
     // mysql handshake protocol documentation
     // https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_connection_phase_packets_protocol_handshake_response.html
 
@@ -27,7 +27,7 @@ pub fn client_handshake(i: &[u8]) -> nom::IResult<&[u8], ClientHandshake<'_>> {
         let (i, collation) = nom::bytes::complete::take(1u8)(i)?;
         let (i, _) = nom::bytes::complete::take(23u8)(i)?;
 
-        let (i, username) = if !capabilities.contains(CapabilityFlags::CLIENT_SSL) {
+        let (i, username) = if after_tls || !capabilities.contains(CapabilityFlags::CLIENT_SSL) {
             let (i, user) = nom::bytes::complete::take_until(&b"\0"[..])(i)?;
             let (i, _) = nom::bytes::complete::tag(b"\0")(i)?;
             (i, Some(user))
@@ -159,7 +159,7 @@ mod tests {
         let r = Cursor::new(data);
         let mut pr = PacketConn::new(r);
         let (_, p) = pr.next().unwrap().unwrap();
-        let (_, handshake) = client_handshake(&p).unwrap();
+        let (_, handshake) = client_handshake(&p, false).unwrap();
         println!("{:?}", handshake);
         assert!(handshake
             .capabilities
@@ -173,6 +173,68 @@ mod tests {
         assert!(!handshake
             .capabilities
             .contains(CapabilityFlags::CLIENT_DEPRECATE_EOF));
+        assert_eq!(handshake.collation, UTF8_GENERAL_CI);
+        assert_eq!(handshake.username.unwrap(), &b"jon"[..]);
+        assert_eq!(handshake.maxps, 16777216);
+    }
+
+    #[test]
+    fn it_parses_handshake_with_ssl_enabled() {
+        let data = [
+            0x25, 0x00, 0x00, 0x01, 0x85, 0xae, 0x3f, 0x20, 0x00, 0x00, 0x00, 0x01, 0x21, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x6a, 0x6f, 0x6e, 0x00, 0x00, 0x05,
+        ]
+        .to_vec();
+        let r = Cursor::new(data);
+        let mut pr = PacketConn::new(r);
+        let (_, p) = pr.next().unwrap().unwrap();
+        let (_, handshake) = client_handshake(&p, false).unwrap();
+        println!("{:?}", handshake);
+        assert!(handshake
+            .capabilities
+            .contains(CapabilityFlags::CLIENT_LONG_PASSWORD));
+        assert!(handshake
+            .capabilities
+            .contains(CapabilityFlags::CLIENT_MULTI_RESULTS));
+        assert!(!handshake
+            .capabilities
+            .contains(CapabilityFlags::CLIENT_CONNECT_WITH_DB));
+        assert!(!handshake
+            .capabilities
+            .contains(CapabilityFlags::CLIENT_DEPRECATE_EOF));
+        assert!(handshake.capabilities.contains(CapabilityFlags::CLIENT_SSL));
+        assert_eq!(handshake.collation, UTF8_GENERAL_CI);
+        assert_eq!(handshake.username, None);
+        assert_eq!(handshake.maxps, 16777216);
+    }
+
+    #[test]
+    fn it_parses_handshake_after_ssl() {
+        let data = [
+            0x25, 0x00, 0x00, 0x01, 0x85, 0xae, 0x3f, 0x20, 0x00, 0x00, 0x00, 0x01, 0x21, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x6a, 0x6f, 0x6e, 0x00, 0x00, 0x05,
+        ]
+        .to_vec();
+        let r = Cursor::new(data);
+        let mut pr = PacketConn::new(r);
+        let (_, p) = pr.next().unwrap().unwrap();
+        let (_, handshake) = client_handshake(&p, true).unwrap();
+        println!("{:?}", handshake);
+        assert!(handshake
+            .capabilities
+            .contains(CapabilityFlags::CLIENT_LONG_PASSWORD));
+        assert!(handshake
+            .capabilities
+            .contains(CapabilityFlags::CLIENT_MULTI_RESULTS));
+        assert!(!handshake
+            .capabilities
+            .contains(CapabilityFlags::CLIENT_CONNECT_WITH_DB));
+        assert!(!handshake
+            .capabilities
+            .contains(CapabilityFlags::CLIENT_DEPRECATE_EOF));
+        assert!(handshake.capabilities.contains(CapabilityFlags::CLIENT_SSL));
         assert_eq!(handshake.collation, UTF8_GENERAL_CI);
         assert_eq!(handshake.username.unwrap(), &b"jon"[..]);
         assert_eq!(handshake.maxps, 16777216);

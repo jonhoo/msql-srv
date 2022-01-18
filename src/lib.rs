@@ -272,7 +272,7 @@ impl<B: MysqlShim<RW>, RW: Read + Write> MysqlIntermediary<B, RW> {
                     "peer terminated connection",
                 )
             })?;
-            let handshake = commands::client_handshake(&handshake)
+            let handshake = commands::client_handshake(&handshake, false)
                 .map_err(|e| match e {
                     nom::Err::Incomplete(_) => io::Error::new(
                         io::ErrorKind::UnexpectedEof,
@@ -323,7 +323,7 @@ impl<B: MysqlShim<RW>, RW: Read + Write> MysqlIntermediary<B, RW> {
                         "peer terminated connection",
                     )
                 })?;
-                let _handshake = commands::client_handshake(&handshake)
+                let _handshake = commands::client_handshake(&handshake, true)
                     .map_err(|e| match e {
                         nom::Err::Incomplete(_) => io::Error::new(
                             io::ErrorKind::UnexpectedEof,
