@@ -183,7 +183,6 @@ fn it_connects() {
 
 #[test]
 #[cfg(feature = "tls")]
-
 fn it_connects_tls_server_only() {
     // Client can connect ok without SSL when SSL is enabled on the server.
     TestingShim::new(
@@ -198,7 +197,6 @@ fn it_connects_tls_server_only() {
 
 #[test]
 #[cfg(feature = "tls")]
-
 fn it_connects_tls_both() {
     // SSL connection when ssl enabled on server and used by client
     TestingShim::new(
