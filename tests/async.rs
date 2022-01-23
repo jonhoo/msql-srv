@@ -104,7 +104,10 @@ where
             MysqlIntermediary::run_on_tcp(self, s)
         });
 
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         rt.block_on(async {
             let conn = mysql_async::Conn::new(
                 Opts::from_url(&format!("mysql://127.0.0.1:{}", port)).unwrap(),
@@ -114,6 +117,7 @@ where
             c(conn).await
         })
         .unwrap();
+        rt.shutdown_background();
 
         jh.join().unwrap().unwrap();
     }
