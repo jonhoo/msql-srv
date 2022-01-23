@@ -5,7 +5,12 @@ extern crate mysql_common as myc;
 extern crate nom;
 
 use mysql::prelude::*;
-use mysql::Opts;
+use mysql::DriverError;
+use mysql::OptsBuilder;
+use mysql::SslOpts;
+#[cfg(feature = "tls")]
+use rustls::{Certificate, PrivateKey, ServerConfig};
+use std::error::Error;
 use std::io;
 use std::net;
 use std::thread;
@@ -22,6 +27,9 @@ struct TestingShim<Q, P, E, I> {
     on_p: P,
     on_e: E,
     on_i: I,
+    #[cfg(feature = "tls")]
+    server_tls: Option<std::sync::Arc<rustls::ServerConfig>>,
+    client_tls: Option<SslOpts>,
 }
 
 impl<Q, P, E, I> MysqlShim<net::TcpStream> for TestingShim<Q, P, E, I>
@@ -64,6 +72,11 @@ where
     ) -> io::Result<()> {
         (self.on_q)(query, results)
     }
+
+    #[cfg(feature = "tls")]
+    fn tls_config(&self) -> Option<std::sync::Arc<rustls::ServerConfig>> {
+        self.server_tls.as_ref().map(std::sync::Arc::clone)
+    }
 }
 
 impl<Q, P, E, I> TestingShim<Q, P, E, I>
@@ -83,6 +96,9 @@ where
             on_p,
             on_e,
             on_i,
+            #[cfg(feature = "tls")]
+            server_tls: None,
+            client_tls: None,
         }
     }
 
@@ -96,10 +112,42 @@ where
         self
     }
 
+    #[cfg(feature = "tls")]
+    fn with_server_tls(mut self) -> Self {
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+
+        self.server_tls = Some(std::sync::Arc::new(
+            ServerConfig::builder()
+                .with_safe_defaults()
+                .with_no_client_auth()
+                .with_single_cert(
+                    vec![Certificate(cert.serialize_der().unwrap())],
+                    PrivateKey(cert.get_key_pair().serialize_der()),
+                )
+                .unwrap(),
+        ));
+
+        self
+    }
+
+    fn with_client_tls(mut self) -> Self {
+        self.client_tls = Some(SslOpts::default().with_danger_accept_invalid_certs(true));
+        self
+    }
+
     fn test<C>(self, c: C)
+    where
+        C: FnOnce(&mut mysql::Conn),
+    {
+        self.test_with_result(c).unwrap()
+    }
+
+    fn test_with_result<C>(self, c: C) -> Result<(), Box<dyn Error + 'static>>
     where
         C: FnOnce(&mut mysql::Conn) -> (),
     {
+        let client_tls = self.client_tls.clone();
+
         let listener = net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         let jh = thread::spawn(move || {
@@ -107,12 +155,18 @@ where
             MysqlIntermediary::run_on_tcp(self, s)
         });
 
-        let mut db =
-            mysql::Conn::new(Opts::from_url(&format!("mysql://127.0.0.1:{}", port)).unwrap())
-                .unwrap();
+        let opts = OptsBuilder::default()
+            .ip_or_hostname(Some("localhost"))
+            .tcp_port(port)
+            .ssl_opts(client_tls);
+
+        let mut db = mysql::Conn::new(opts)?;
+
         c(&mut db);
         drop(db);
         jh.join().unwrap().unwrap();
+
+        Ok(())
     }
 }
 
@@ -124,7 +178,60 @@ fn it_connects() {
         |_, _, _| unreachable!(),
         |_, _| unreachable!(),
     )
+    .test(|_| {});
+}
+
+#[test]
+#[cfg(feature = "tls")]
+fn it_connects_tls_server_only() {
+    // Client can connect ok without SSL when SSL is enabled on the server.
+    TestingShim::new(
+        |_, _| unreachable!(),
+        |_| unreachable!(),
+        |_, _, _| unreachable!(),
+        |_, _| unreachable!(),
+    )
+    .with_server_tls()
     .test(|_| {})
+}
+
+#[test]
+#[cfg(feature = "tls")]
+fn it_connects_tls_both() {
+    // SSL connection when ssl enabled on server and used by client
+    TestingShim::new(
+        |_, _| unreachable!(),
+        |_| unreachable!(),
+        |_, _, _| unreachable!(),
+        |_, _| unreachable!(),
+    )
+    .with_server_tls()
+    .with_client_tls()
+    .test(|_| {})
+}
+
+#[test]
+fn it_does_not_connect_tls_client_only() {
+    // Client requesting tls fails as expected when server does not support it.
+
+    let e = TestingShim::new(
+        |_, _| unreachable!(),
+        |_| unreachable!(),
+        |_, _, _| unreachable!(),
+        |_, _| unreachable!(),
+    )
+    .with_client_tls()
+    .test_with_result(|_| {})
+    .expect_err("client should not have connected");
+
+    assert!(
+        matches!(
+            e.downcast_ref::<mysql::Error>(),
+            Some(mysql::Error::DriverError(DriverError::TlsNotSupported))
+        ),
+        "unexpected error {:?}",
+        e
+    );
 }
 
 #[test]
@@ -751,7 +858,7 @@ fn prepared_empty() {
         coltype: myc::constants::ColumnType::MYSQL_TYPE_SHORT,
         colflags: myc::constants::ColumnFlags::empty(),
     }];
-    let cols2 = cols.clone();
+    let cols2 = cols;
     let params = vec![Column {
         table: String::new(),
         column: "c".to_owned(),

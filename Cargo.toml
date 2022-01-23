@@ -17,17 +17,22 @@ categories = ["api-bindings", "network-programming", "database-implementations"]
 
 license = "MIT/Apache-2.0"
 
+[features]
+default = ["tls"]
+tls = ["rustls"]
+
 [badges]
 azure-devops = { project = "jonhoo/jonhoo", pipeline = "msql-srv", build = "27" }
 codecov = { repository = "jonhoo/msql-srv", branch = "master", service = "github" }
 maintenance = { status = "experimental" }
 
 [dependencies]
-nom = "5"
+nom = "7"
 mysql_common = { version = "0.28.0", features = ["chrono"] }
 byteorder = "1"
 chrono = "0.4"
 time = "0.2.25"
+rustls = {version = "0.20.0", optional=true}
 
 [dev-dependencies]
 postgres = "0.19.1"
@@ -36,3 +41,4 @@ mysql_async = "0.29.0"
 slab = "0.4.2"
 tokio = { version = "1.15.0", features = ["full"] }
 futures = "0.3.0"
+rcgen = "0.8.14"

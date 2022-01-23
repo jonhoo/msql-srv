@@ -1,16 +1,28 @@
 use byteorder::{ByteOrder, LittleEndian};
+#[cfg(feature = "tls")]
+use rustls::ServerConfig;
 use std::io;
 use std::io::prelude::*;
 
 const U24_MAX: usize = 16_777_215;
 
-pub struct PacketWriter<W> {
+pub struct PacketConn<RW: Read + Write> {
+    #[cfg(feature = "tls")]
+    rw: tls::SwitchableConn<RW>,
+    #[cfg(not(feature = "tls"))]
+    rw: RW,
+
+    // read variables
+    bytes: Vec<u8>,
+    start: usize,
+    remaining: usize,
+
+    // write variables
     to_write: Vec<u8>,
     seq: u8,
-    w: W,
 }
 
-impl<W: Write> Write for PacketWriter<W> {
+impl<W: Read + Write> Write for PacketConn<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         use std::cmp::min;
         let left = min(buf.len(), U24_MAX - self.to_write.len());
@@ -24,19 +36,28 @@ impl<W: Write> Write for PacketWriter<W> {
 
     fn flush(&mut self) -> io::Result<()> {
         self.maybe_end_packet()?;
-        self.w.flush()
+        self.rw.flush()
     }
 }
 
-impl<W: Write> PacketWriter<W> {
-    pub fn new(w: W) -> Self {
-        PacketWriter {
+impl<RW: Read + Write> PacketConn<RW> {
+    pub fn new(rw: RW) -> Self {
+        #[cfg(feature = "tls")]
+        let rw = tls::SwitchableConn::new(rw);
+
+        PacketConn {
+            bytes: Vec::new(),
+            start: 0,
+            remaining: 0,
+
             to_write: vec![0, 0, 0, 0],
             seq: 0,
-            w,
+            rw,
         }
     }
+}
 
+impl<W: Read + Write> PacketConn<W> {
     fn maybe_end_packet(&mut self) -> io::Result<()> {
         let len = self.to_write.len() - 4;
         if len != 0 {
@@ -44,7 +65,7 @@ impl<W: Write> PacketWriter<W> {
             self.to_write[3] = self.seq;
             self.seq = self.seq.wrapping_add(1);
 
-            self.w.write_all(&self.to_write[..])?;
+            self.rw.write_all(&self.to_write[..])?;
             self.to_write.truncate(4); // back to just header
         }
         Ok(())
@@ -53,34 +74,23 @@ impl<W: Write> PacketWriter<W> {
     pub fn end_packet(&mut self) -> io::Result<()> {
         self.maybe_end_packet()
     }
+
+    #[cfg(feature = "tls")]
+    pub fn switch_to_tls(&mut self, config: std::sync::Arc<ServerConfig>) -> io::Result<()> {
+        assert_eq!(self.remaining, 0); // otherwise we've read ahead into the TLS handshake and will be in trouble.
+
+        self.rw.switch_to_tls(config)
+    }
 }
 
-impl<W> PacketWriter<W> {
+impl<W: Read + Write> PacketConn<W> {
     pub fn set_seq(&mut self, seq: u8) {
         self.seq = seq;
     }
 }
 
-pub struct PacketReader<R> {
-    bytes: Vec<u8>,
-    start: usize,
-    remaining: usize,
-    r: R,
-}
-
-impl<R> PacketReader<R> {
-    pub fn new(r: R) -> Self {
-        PacketReader {
-            bytes: Vec::new(),
-            start: 0,
-            remaining: 0,
-            r,
-        }
-    }
-}
-
-impl<R: Read> PacketReader<R> {
-    pub fn next(&mut self) -> io::Result<Option<(u8, Packet<'_>)>> {
+impl<R: Read + Write> PacketConn<R> {
+    pub fn next(&mut self) -> io::Result<Option<(u8, Packet)>> {
         self.start = self.bytes.len() - self.remaining;
 
         loop {
@@ -115,7 +125,7 @@ impl<R: Read> PacketReader<R> {
             self.bytes.resize(std::cmp::max(4096, end * 2), 0);
             let read = {
                 let buf = &mut self.bytes[end..];
-                self.r.read(buf)?
+                self.rw.read(buf)?
             };
             self.bytes.truncate(end + read);
             self.remaining = self.bytes.len();
@@ -150,59 +160,45 @@ pub fn onepacket(i: &[u8]) -> nom::IResult<&[u8], (u8, &[u8])> {
 
 // Clone because of https://github.com/Geal/nom/issues/1008
 #[derive(Clone)]
-pub struct Packet<'a>(&'a [u8], Vec<u8>);
+pub struct Packet(Vec<u8>);
 
-impl<'a> Packet<'a> {
-    fn extend(&mut self, bytes: &'a [u8]) {
-        if self.0.is_empty() {
-            if self.1.is_empty() {
-                // first extend
-                self.0 = bytes;
-            } else {
-                // later extend
-                self.1.extend(bytes);
-            }
-        } else {
-            assert!(self.1.is_empty());
-            let mut v = self.0.to_vec();
-            v.extend(bytes);
-            self.1 = v;
-            self.0 = &[];
-        }
+impl Packet {
+    fn extend(&mut self, bytes: &[u8]) {
+        self.0.extend(bytes);
     }
 }
 
-impl<'a> AsRef<[u8]> for Packet<'a> {
+impl AsRef<[u8]> for Packet {
     fn as_ref(&self) -> &[u8] {
-        if self.1.is_empty() {
-            self.0
-        } else {
-            &*self.1
-        }
+        &self.0
     }
 }
 
 use std::ops::Deref;
-impl<'a> Deref for Packet<'a> {
+
+#[cfg(feature = "tls")]
+use crate::tls;
+
+impl Deref for Packet {
     type Target = [u8];
     fn deref(&self) -> &Self::Target {
         self.as_ref()
     }
 }
 
-fn packet(i: &[u8]) -> nom::IResult<&[u8], (u8, Packet<'_>)> {
+fn packet(i: &[u8]) -> nom::IResult<&[u8], (u8, Packet)> {
     nom::combinator::map(
         nom::sequence::pair(
             nom::multi::fold_many0(
                 fullpacket,
-                (0, None),
-                |(seq, pkt): (_, Option<Packet<'_>>), (nseq, p)| {
+                || (0, None),
+                |(seq, pkt): (_, Option<Packet>), (nseq, p)| {
                     let pkt = if let Some(mut pkt) = pkt {
                         assert_eq!(nseq, seq + 1);
                         pkt.extend(p);
                         Some(pkt)
                     } else {
-                        Some(Packet(p, Vec::new()))
+                        Some(Packet(Vec::from(p)))
                     };
                     (nseq, pkt)
                 },
@@ -216,7 +212,7 @@ fn packet(i: &[u8]) -> nom::IResult<&[u8], (u8, Packet<'_>)> {
                 pkt.extend(last.1);
                 pkt
             } else {
-                Packet(last.1, Vec::new())
+                Packet(Vec::from(last.1))
             };
             (seq, pkt)
         },
