@@ -235,14 +235,12 @@ fn error_response() {
     )
     .test(|mut db| async move {
         let res: Result<Vec<mysql_async::Row>, _> = db.query("SELECT a, b FROM foo").await;
-
-        match res {
-            Ok(_) => assert!(false),
-            Err(mysql_async::Error::Server(mysql_async::ServerError {
+        match res.unwrap_err() {
+            mysql_async::Error::Server(mysql_async::ServerError {
                 code,
                 message: ref msg,
                 ref state,
-            })) => {
+            }) => {
                 assert_eq!(
                     state,
                     &String::from_utf8(err.0.sqlstate().to_vec()).unwrap()
@@ -250,11 +248,11 @@ fn error_response() {
                 assert_eq!(code, err.0 as u16);
                 assert_eq!(msg, &err.1);
             }
-            Err(e) => {
+            e => {
                 eprintln!("unexpected {:?}", e);
                 assert!(false);
             }
-        }
+        };
         Ok(())
     })
 }
