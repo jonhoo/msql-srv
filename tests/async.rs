@@ -523,10 +523,9 @@ fn insert_exec() {
     .test(|mut db| async move {
         let prep = db
             .prep(
-                "INSERT INTO `users` \
-        (`username`, `email`, `password_digest`, `created_at`, \
-        `session_token`, `rss_token`, `mailing_list_token`) \
-        VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO `users` (`username`, `email`, `password_digest`, \
+                     `created_at`, `session_token`, `rss_token`, `mailing_list_token`) \
+                      VALUES (?, ?, ?, ?, ?, ?, ?)",
             )
             .await?;
 
