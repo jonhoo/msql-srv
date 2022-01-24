@@ -85,12 +85,7 @@ impl<W: Read + Write> PacketConn<W> {
     #[cfg(feature = "tls")]
     pub fn tls_certs(&self) -> Option<&[Certificate]> {
         match &self.rw.0 {
-            Some(tls::EitherConn::Tls(tls_conn)) => {
-                let sc = &tls_conn.conn;
-                let x = sc.peer_certificates();
-
-                x
-            }
+            Some(tls::EitherConn::Tls(tls_conn)) => tls_conn.conn.peer_certificates(),
             _ => None,
         }
     }
