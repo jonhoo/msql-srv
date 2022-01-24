@@ -158,7 +158,7 @@ where
             self.client_cert_pkcs12_file = Some(Arc::clone(&client_cert_pkcs12_file));
 
             let pkcs12 = Pkcs12::builder()
-                .build("", "friendly_name", &client_pkey, &client_cert)
+                .build("password", "friendly_name", &client_pkey, &client_cert)
                 .unwrap();
             let der = pkcs12.to_der().unwrap();
 
@@ -202,11 +202,13 @@ where
             let mut opts = SslOpts::default().with_danger_accept_invalid_certs(true);
 
             if use_client_certs {
-                opts = opts.with_pkcs12_path(
-                    self.client_cert_pkcs12_file
-                        .as_ref()
-                        .map(|x| x.path().to_owned()),
-                );
+                opts = opts
+                    .with_pkcs12_path(
+                        self.client_cert_pkcs12_file
+                            .as_ref()
+                            .map(|x| x.path().to_owned()),
+                    )
+                    .with_password(Some("password"));
             }
             self.client_tls = Some(opts);
         }
