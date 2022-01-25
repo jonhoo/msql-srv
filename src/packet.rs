@@ -77,9 +77,11 @@ impl<W: Read + Write> PacketConn<W> {
 
     #[cfg(feature = "tls")]
     pub fn switch_to_tls(&mut self, config: std::sync::Arc<ServerConfig>) -> io::Result<()> {
-        assert_eq!(self.remaining, 0); // otherwise we've read ahead into the TLS handshake and will be in trouble.
-
-        self.rw.switch_to_tls(config)
+        let res = self
+            .rw
+            .switch_to_tls(config, &self.bytes[self.bytes.len() - self.remaining..]);
+        self.remaining = 0;
+        res
     }
 }
 

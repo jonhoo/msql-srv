@@ -12,8 +12,11 @@ use mysql::SslOpts;
 use rustls::{Certificate, PrivateKey, ServerConfig};
 use std::error::Error;
 use std::io;
+use std::io::Read;
+use std::io::Write;
 use std::net;
 use std::thread;
+use std::time::Duration;
 
 use msql_srv::{
     Column, ErrorKind, InitWriter, MysqlIntermediary, MysqlShim, ParamParser, QueryResultWriter,
@@ -210,6 +213,108 @@ fn it_connects_tls_both() {
     .test(|_| {})
 }
 
+#[test]
+#[cfg(feature = "tls")]
+fn it_connects_tls_both_with_delayed_server_read() {
+    use std::{marker::PhantomData, sync::Arc};
+
+    struct MyShim<RW> {
+        ph: PhantomData<RW>,
+    }
+
+    impl<RW: Read + Write> MysqlShim<RW> for MyShim<RW> {
+        type Error = io::Error;
+
+        fn on_prepare(
+            &mut self,
+            _: &str,
+            _: StatementMetaWriter<'_, RW>,
+        ) -> Result<(), Self::Error> {
+            unreachable!()
+        }
+
+        fn on_execute(
+            &mut self,
+            _: u32,
+            _: ParamParser<'_>,
+            _: QueryResultWriter<'_, RW>,
+        ) -> Result<(), Self::Error> {
+            unreachable!()
+        }
+
+        fn on_close(&mut self, _: u32) {
+            unreachable!()
+        }
+
+        fn on_query(&mut self, _: &str, _: QueryResultWriter<'_, RW>) -> Result<(), Self::Error> {
+            unreachable!()
+        }
+
+        fn tls_config(&self) -> Option<Arc<ServerConfig>> {
+            let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+
+            Some(std::sync::Arc::new(
+                ServerConfig::builder()
+                    .with_safe_defaults()
+                    .with_no_client_auth()
+                    .with_single_cert(
+                        vec![Certificate(cert.serialize_der().unwrap())],
+                        PrivateKey(cert.get_key_pair().serialize_der()),
+                    )
+                    .unwrap(),
+            ))
+        }
+    }
+
+    let shim = MyShim {
+        ph: PhantomData::default(),
+    };
+
+    let listener = net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let jh = thread::spawn(move || {
+        let (s, _) = listener.accept().unwrap();
+        let s = DelayedReadRW {
+            s,
+            read_delay: Duration::from_millis(200),
+        };
+        MysqlIntermediary::run_on(shim, s)
+    });
+
+    let db = mysql::Conn::new(
+        OptsBuilder::default()
+            .ip_or_hostname(Some("localhost"))
+            .tcp_port(port)
+            .ssl_opts(Some(
+                SslOpts::default().with_danger_accept_invalid_certs(true),
+            )),
+    )
+    .unwrap();
+    drop(db);
+    jh.join().unwrap().unwrap();
+}
+
+struct DelayedReadRW<RW: Read + Write> {
+    s: RW,
+    read_delay: Duration,
+}
+
+impl<RW: Read + Write> Read for DelayedReadRW<RW> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        thread::sleep(self.read_delay);
+        self.s.read(buf)
+    }
+}
+
+impl<RW: Read + Write> Write for DelayedReadRW<RW> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.s.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.s.flush()
+    }
+}
 #[test]
 fn it_does_not_connect_tls_client_only() {
     // Client requesting tls fails as expected when server does not support it.
