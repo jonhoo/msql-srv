@@ -289,7 +289,7 @@ fn mk_client_cert() -> Result<(X509, PKey<Private>), ErrorStack> {
 
 #[test]
 fn it_connects() {
-    let auth_context = Arc::new(Mutex::new(None));
+    let auth_context = Arc::new(Mutex::new((None, None)));
     let auth_context1 = Arc::clone(&auth_context);
     TestingShim::new(
         |_, _| unreachable!(),
@@ -298,28 +298,22 @@ fn it_connects() {
         |_, _| unreachable!(),
         move |a| {
             let mut ac = auth_context1.lock().unwrap();
-            *ac = Some(a.clone());
+            *ac = (a.username.clone(), a.tls_client_certs.map(|x| x.to_vec()));
             Ok(())
         },
     )
     .test(|_| {});
 
     let ac = auth_context.lock().unwrap();
-    assert_eq!(
-        ac.as_ref(),
-        Some(&AuthenticationContext {
-            username: Some(b"username".to_vec()),
-            #[cfg(feature = "tls")]
-            tls_client_certs: None
-        })
-    );
+    assert_eq!(ac.0, Some(b"username".to_vec()));
+    assert_eq!(ac.1, None);
 }
 
 #[test]
 #[cfg(feature = "tls")]
 fn it_connects_tls_server_only() {
     // Client can connect ok without SSL when SSL is enabled on the server.
-    let auth_context = Arc::new(Mutex::new(None));
+    let auth_context = Arc::new(Mutex::new((None, None)));
     let auth_context1 = Arc::clone(&auth_context);
     TestingShim::new(
         |_, _| unreachable!(),
@@ -328,7 +322,7 @@ fn it_connects_tls_server_only() {
         |_, _| unreachable!(),
         move |a| {
             let mut ac = auth_context1.lock().unwrap();
-            *ac = Some(a.clone());
+            *ac = (a.username.clone(), a.tls_client_certs.map(|x| x.to_vec()));
             Ok(())
         },
     )
@@ -336,20 +330,15 @@ fn it_connects_tls_server_only() {
     .test(|_| {});
 
     let ac = auth_context.lock().unwrap();
-    assert_eq!(
-        ac.as_ref(),
-        Some(&AuthenticationContext {
-            username: Some(b"username".to_vec()),
-            tls_client_certs: None
-        })
-    );
+    assert_eq!(ac.0, Some(b"username".to_vec()));
+    assert_eq!(ac.1, None);
 }
 
 #[test]
 #[cfg(feature = "tls")]
 fn it_connects_tls_both_no_client_certs() {
     // SSL connection when ssl enabled on server and used by client, client not passing certs to the server.
-    let auth_context = Arc::new(Mutex::new(None));
+    let auth_context = Arc::new(Mutex::new((None, None)));
     let auth_context1 = Arc::clone(&auth_context);
     TestingShim::new(
         |_, _| unreachable!(),
@@ -358,7 +347,7 @@ fn it_connects_tls_both_no_client_certs() {
         |_, _| unreachable!(),
         move |a| {
             let mut ac = auth_context1.lock().unwrap();
-            *ac = Some(a.clone());
+            *ac = (a.username.clone(), a.tls_client_certs.map(|x| x.to_vec()));
             Ok(())
         },
     )
@@ -366,20 +355,15 @@ fn it_connects_tls_both_no_client_certs() {
     .test(|_| {});
 
     let ac = auth_context.lock().unwrap();
-    assert_eq!(
-        ac.as_ref(),
-        Some(&AuthenticationContext {
-            username: Some(b"username".to_vec()),
-            tls_client_certs: None
-        })
-    );
+    assert_eq!(ac.0, Some(b"username".to_vec()));
+    assert_eq!(ac.1, None);
 }
 
 #[test]
 #[cfg(feature = "tls")]
 fn it_connects_tls_both_with_client_certs() {
     // SSL connection when ssl enabled on server and used by client, with the client passing certs to the server.
-    let auth_context = Arc::new(Mutex::new(None));
+    let auth_context = Arc::new(Mutex::new((None, None)));
     let auth_context1 = Arc::clone(&auth_context);
     TestingShim::new(
         |_, _| unreachable!(),
@@ -388,7 +372,7 @@ fn it_connects_tls_both_with_client_certs() {
         |_, _| unreachable!(),
         move |a| {
             let mut ac = auth_context1.lock().unwrap();
-            *ac = Some(a.clone());
+            *ac = (a.username.clone(), a.tls_client_certs.map(|x| x.to_vec()));
             Ok(())
         },
     )
@@ -396,19 +380,14 @@ fn it_connects_tls_both_with_client_certs() {
     .test(|_| {});
 
     let ac = auth_context.lock().unwrap();
-    let ac = ac.as_ref().expect("after_auth was not called");
-    assert_eq!(ac.username, Some(b"username".to_vec()));
-    assert!(!ac
-        .tls_client_certs
-        .as_ref()
-        .expect("expected client certs")
-        .is_empty());
+    assert_eq!(ac.0, Some(b"username".to_vec()));
+    assert!(!ac.1.as_ref().expect("expected client certs").is_empty());
 }
 
 #[test]
 fn it_does_not_connect_tls_client_only() {
     // Client requesting tls fails as expected when server does not support it.
-    let auth_context = Arc::new(Mutex::new(None));
+    let auth_context = Arc::new(Mutex::new((None, None)));
     let auth_context1 = Arc::clone(&auth_context);
     let e = TestingShim::new(
         |_, _| unreachable!(),
@@ -417,7 +396,7 @@ fn it_does_not_connect_tls_client_only() {
         |_, _| unreachable!(),
         move |a| {
             let mut ac = auth_context1.lock().unwrap();
-            *ac = Some(a.clone());
+            *ac = (a.username.clone(), a.tls_client_certs.map(|x| x.to_vec()));
             Ok(())
         },
     )
@@ -434,7 +413,8 @@ fn it_does_not_connect_tls_client_only() {
     );
 
     let ac = auth_context.lock().unwrap();
-    assert!(ac.is_none());
+    assert!(ac.0.is_none());
+    assert!(ac.1.is_none());
 }
 
 #[test]

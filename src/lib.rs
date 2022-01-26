@@ -200,7 +200,7 @@ pub trait MysqlShim<W: Read + Write> {
     /// information to allow additional logic in the MySqlShim implementation.
     fn after_authentication(
         &mut self,
-        _context: &AuthenticationContext,
+        _context: &AuthenticationContext<'_>,
     ) -> Result<(), Self::Error> {
         Ok(())
     }
@@ -208,12 +208,12 @@ pub trait MysqlShim<W: Read + Write> {
 
 /// Information about an authenticated user
 #[derive(Debug, Default, Clone, PartialEq)]
-pub struct AuthenticationContext {
+pub struct AuthenticationContext<'a> {
     /// The username exactly as passed by the client,
     pub username: Option<Vec<u8>>,
     #[cfg(feature = "tls")]
     /// The TLS certificate chain presented by the client.
-    pub tls_client_certs: Option<Vec<rustls::Certificate>>,
+    pub tls_client_certs: Option<&'a [rustls::Certificate]>,
 }
 
 /// A server that speaks the MySQL/MariaDB protocol, and can delegate client commands to a backend
@@ -384,7 +384,7 @@ impl<B: MysqlShim<RW>, RW: Read + Write> MysqlIntermediary<B, RW> {
 
                 self.rw.set_seq(seq + 1);
 
-                auth_context.tls_client_certs = self.rw.tls_certs().map(|c| c.to_vec());
+                auth_context.tls_client_certs = self.rw.tls_certs();
             }
 
             if let Err(e) = self.shim.after_authentication(&auth_context) {
