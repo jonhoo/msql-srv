@@ -199,18 +199,16 @@ where
         }
 
         if client {
-            let mut opts = SslOpts::default().with_danger_accept_invalid_certs(true);
-
-            if use_client_certs {
-                opts = opts
+            self.client_tls = Some(
+                SslOpts::default()
+                    .with_danger_accept_invalid_certs(true)
                     .with_pkcs12_path(
                         self.client_cert_pkcs12_file
                             .as_ref()
                             .map(|x| x.path().to_owned()),
                     )
-                    .with_password(Some("password"));
-            }
-            self.client_tls = Some(opts);
+                    .with_password(Some("password")),
+            );
         }
 
         self
