@@ -298,6 +298,7 @@ fn it_connects() {
         |_, _| unreachable!(),
         move |a| {
             let mut ac = auth_context1.lock().unwrap();
+            assert_eq!(*ac, (None, None));
             *ac = (a.username.clone(), a.tls_client_certs.map(|x| x.to_vec()));
             Ok(())
         },
@@ -322,6 +323,7 @@ fn it_connects_tls_server_only() {
         |_, _| unreachable!(),
         move |a| {
             let mut ac = auth_context1.lock().unwrap();
+            assert_eq!(*ac, (None, None));
             *ac = (a.username.clone(), a.tls_client_certs.map(|x| x.to_vec()));
             Ok(())
         },
@@ -347,6 +349,7 @@ fn it_connects_tls_both_no_client_certs() {
         |_, _| unreachable!(),
         move |a| {
             let mut ac = auth_context1.lock().unwrap();
+            assert_eq!(*ac, (None, None));
             *ac = (a.username.clone(), a.tls_client_certs.map(|x| x.to_vec()));
             Ok(())
         },
@@ -372,6 +375,7 @@ fn it_connects_tls_both_with_client_certs() {
         |_, _| unreachable!(),
         move |a| {
             let mut ac = auth_context1.lock().unwrap();
+            assert_eq!(*ac, (None, None));
             *ac = (a.username.clone(), a.tls_client_certs.map(|x| x.to_vec()));
             Ok(())
         },
@@ -396,6 +400,7 @@ fn it_does_not_connect_tls_client_only() {
         |_, _| unreachable!(),
         move |a| {
             let mut ac = auth_context1.lock().unwrap();
+            assert_eq!(*ac, (None, None));
             *ac = (a.username.clone(), a.tls_client_certs.map(|x| x.to_vec()));
             Ok(())
         },
