@@ -39,27 +39,27 @@ use std::sync::Mutex;
 use std::thread;
 use tempfile::NamedTempFile;
 
-struct TestingShim<Q, P, E, I, T> {
+struct TestingShim<Q, P, E, I, A> {
     columns: Vec<Column>,
     params: Vec<Column>,
     on_q: Q,
     on_p: P,
     on_e: E,
     on_i: I,
-    after_auth: T,
+    after_auth: A,
     #[cfg(feature = "tls")]
     server_tls: Option<std::sync::Arc<rustls::ServerConfig>>,
     client_tls: Option<SslOpts>,
     client_cert_pkcs12_file: Option<Arc<NamedTempFile>>,
 }
 
-impl<Q, P, E, I, T> MysqlShim<net::TcpStream> for TestingShim<Q, P, E, I, T>
+impl<Q, P, E, I, A> MysqlShim<net::TcpStream> for TestingShim<Q, P, E, I, A>
 where
     Q: FnMut(&str, QueryResultWriter<net::TcpStream>) -> io::Result<()>,
     P: FnMut(&str) -> u32,
     E: FnMut(u32, Vec<msql_srv::ParamValue>, QueryResultWriter<net::TcpStream>) -> io::Result<()>,
     I: FnMut(&str, InitWriter<net::TcpStream>) -> io::Result<()>,
-    T: FnMut(&AuthenticationContext) -> io::Result<()>,
+    A: FnMut(&AuthenticationContext) -> io::Result<()>,
 {
     type Error = io::Error;
 
