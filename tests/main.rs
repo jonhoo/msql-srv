@@ -13,6 +13,7 @@ use mysql::DriverError;
 use mysql::OptsBuilder;
 use mysql::SslOpts;
 use mysql::{prelude::*, MySqlError};
+#[cfg(unix)]
 use openssl::{
     asn1::Asn1Time,
     bn::{BigNum, MsbOption},
@@ -141,6 +142,7 @@ where
         self
     }
 
+    #[cfg(unix)]
     fn with_tls(mut self, client: bool, server: bool, use_client_certs: bool) -> Self {
         #[cfg(feature = "tls")]
         let mut client_cert_der = None;
@@ -310,6 +312,7 @@ fn it_connects() {
 
 #[test]
 #[cfg(feature = "tls")]
+#[cfg(unix)]
 fn it_connects_tls_server_only() {
     // Client can connect ok without SSL when SSL is enabled on the server.
     let auth_context = Arc::new(Mutex::new((None, None)));
@@ -336,6 +339,7 @@ fn it_connects_tls_server_only() {
 
 #[test]
 #[cfg(feature = "tls")]
+#[cfg(unix)]
 fn it_connects_tls_both_no_client_certs() {
     // SSL connection when ssl enabled on server and used by client, client not passing certs to the server.
     let auth_context = Arc::new(Mutex::new((None, None)));
@@ -362,6 +366,7 @@ fn it_connects_tls_both_no_client_certs() {
 
 #[test]
 #[cfg(feature = "tls")]
+#[cfg(unix)]
 fn it_connects_tls_both_with_client_certs() {
     // SSL connection when ssl enabled on server and used by client, with the client passing certs to the server.
     let auth_context = Arc::new(Mutex::new((None, None)));
@@ -387,6 +392,7 @@ fn it_connects_tls_both_with_client_certs() {
 }
 
 #[test]
+#[cfg(unix)]
 fn it_does_not_connect_tls_client_only() {
     // Client requesting tls fails as expected when server does not support it.
     let auth_context = Arc::new(Mutex::new((None, None)));

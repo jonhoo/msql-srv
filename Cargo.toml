@@ -42,5 +42,8 @@ slab = "0.4.2"
 tokio = "0.1.19"
 futures = "0.1.26"
 rcgen = "0.8.14"
-openssl = "0.10.38"
 tempfile = "3.3.0"
+native-tls = "0.2.8"
+
+[target.'cfg(unix)'.dev-dependencies]
+openssl = "0.10.38"
