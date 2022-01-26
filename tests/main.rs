@@ -310,11 +310,13 @@ fn it_connects() {
     assert_eq!(ac.1, None);
 }
 
-#[test]
 #[cfg(feature = "tls")]
 #[cfg(unix)]
-fn it_connects_tls_server_only() {
-    // Client can connect ok without SSL when SSL is enabled on the server.
+fn tls_test_common(
+    enable_client_tls: bool,
+    enable_server_tls: bool,
+    use_client_certs: bool,
+) -> Result<(Option<Vec<u8>>, Option<Vec<Certificate>>), Box<dyn Error + 'static>> {
     let auth_context = Arc::new(Mutex::new((None, None)));
     let auth_context1 = Arc::clone(&auth_context);
     TestingShim::new(
@@ -329,12 +331,20 @@ fn it_connects_tls_server_only() {
             Ok(())
         },
     )
-    .with_tls(false, true, false)
-    .test(|_| {});
+    .with_tls(enable_client_tls, enable_server_tls, use_client_certs)
+    .test_with_result(|_| {})?;
 
-    let ac = auth_context.lock().unwrap();
-    assert_eq!(ac.0, Some(b"username".to_vec()));
-    assert_eq!(ac.1, None);
+    Ok(Arc::try_unwrap(auth_context).unwrap().into_inner().unwrap())
+}
+
+#[test]
+#[cfg(feature = "tls")]
+#[cfg(unix)]
+fn it_connects_tls_server_only() {
+    // Client can connect ok without SSL when SSL is enabled on the server.
+    let (username, certs) = tls_test_common(false, true, false).unwrap();
+    assert_eq!(username, Some(b"username".to_vec()));
+    assert_eq!(certs, None);
 }
 
 #[test]
@@ -342,26 +352,9 @@ fn it_connects_tls_server_only() {
 #[cfg(unix)]
 fn it_connects_tls_both_no_client_certs() {
     // SSL connection when ssl enabled on server and used by client, client not passing certs to the server.
-    let auth_context = Arc::new(Mutex::new((None, None)));
-    let auth_context1 = Arc::clone(&auth_context);
-    TestingShim::new(
-        |_, _| unreachable!(),
-        |_| unreachable!(),
-        |_, _, _| unreachable!(),
-        |_, _| unreachable!(),
-        move |a| {
-            let mut ac = auth_context1.lock().unwrap();
-            assert_eq!(*ac, (None, None));
-            *ac = (a.username.clone(), a.tls_client_certs.map(|x| x.to_vec()));
-            Ok(())
-        },
-    )
-    .with_tls(true, true, false)
-    .test(|_| {});
-
-    let ac = auth_context.lock().unwrap();
-    assert_eq!(ac.0, Some(b"username".to_vec()));
-    assert_eq!(ac.1, None);
+    let (username, certs) = tls_test_common(true, true, false).unwrap();
+    assert_eq!(username, Some(b"username".to_vec()));
+    assert_eq!(certs, None);
 }
 
 #[test]
@@ -369,49 +362,16 @@ fn it_connects_tls_both_no_client_certs() {
 #[cfg(unix)]
 fn it_connects_tls_both_with_client_certs() {
     // SSL connection when ssl enabled on server and used by client, with the client passing certs to the server.
-    let auth_context = Arc::new(Mutex::new((None, None)));
-    let auth_context1 = Arc::clone(&auth_context);
-    TestingShim::new(
-        |_, _| unreachable!(),
-        |_| unreachable!(),
-        |_, _, _| unreachable!(),
-        |_, _| unreachable!(),
-        move |a| {
-            let mut ac = auth_context1.lock().unwrap();
-            assert_eq!(*ac, (None, None));
-            *ac = (a.username.clone(), a.tls_client_certs.map(|x| x.to_vec()));
-            Ok(())
-        },
-    )
-    .with_tls(true, true, true)
-    .test(|_| {});
-
-    let ac = auth_context.lock().unwrap();
-    assert_eq!(ac.0, Some(b"username".to_vec()));
-    assert!(!ac.1.as_ref().expect("expected client certs").is_empty());
+    let (username, certs) = tls_test_common(true, true, true).unwrap();
+    assert_eq!(username, Some(b"username".to_vec()));
+    assert!(!certs.expect("expected client certs").is_empty());
 }
 
 #[test]
 #[cfg(unix)]
 fn it_does_not_connect_tls_client_only() {
     // Client requesting tls fails as expected when server does not support it.
-    let auth_context = Arc::new(Mutex::new((None, None)));
-    let auth_context1 = Arc::clone(&auth_context);
-    let e = TestingShim::new(
-        |_, _| unreachable!(),
-        |_| unreachable!(),
-        |_, _, _| unreachable!(),
-        |_, _| unreachable!(),
-        move |a| {
-            let mut ac = auth_context1.lock().unwrap();
-            assert_eq!(*ac, (None, None));
-            *ac = (a.username.clone(), a.tls_client_certs.map(|x| x.to_vec()));
-            Ok(())
-        },
-    )
-    .with_tls(true, false, false)
-    .test_with_result(|_| {})
-    .expect_err("client should not have connected");
+    let e = tls_test_common(true, false, false).expect_err("client should not have connected");
     assert!(
         matches!(
             e.downcast_ref::<mysql::Error>(),
@@ -420,10 +380,6 @@ fn it_does_not_connect_tls_client_only() {
         "unexpected error {:?}",
         e
     );
-
-    let ac = auth_context.lock().unwrap();
-    assert!(ac.0.is_none());
-    assert!(ac.1.is_none());
 }
 
 #[test]
