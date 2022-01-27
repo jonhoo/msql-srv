@@ -25,8 +25,10 @@ use openssl::{
     x509::{extension::SubjectKeyIdentifier, X509},
 };
 #[cfg(feature = "tls")]
+#[cfg(unix)]
 use rcgen::generate_simple_self_signed;
 #[cfg(feature = "tls")]
+#[cfg(unix)]
 use rustls::{
     server::AllowAnyAuthenticatedClient, Certificate, PrivateKey, RootCertStore, ServerConfig,
 };
@@ -49,6 +51,7 @@ struct TestingShim<Q, P, E, I, A> {
     server_tls: Option<std::sync::Arc<rustls::ServerConfig>>,
     client_tls: Option<SslOpts>,
     #[cfg(feature = "tls")]
+    #[cfg(unix)]
     client_cert_pkcs12_file: Option<Arc<tempfile::NamedTempFile>>,
 }
 
@@ -127,6 +130,7 @@ where
             server_tls: None,
             client_tls: None,
             #[cfg(feature = "tls")]
+            #[cfg(unix)]
             client_cert_pkcs12_file: None,
         }
     }
@@ -252,6 +256,7 @@ where
 }
 
 #[cfg(feature = "tls")]
+#[cfg(unix)]
 fn mk_client_cert() -> Result<(X509, PKey<Private>), ErrorStack> {
     let key_pair = PKey::from_rsa(Rsa::generate(2048)?)?;
 
