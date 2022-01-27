@@ -9,11 +9,11 @@ use msql_srv::{
     Column, ErrorKind, InitWriter, MysqlIntermediary, MysqlShim, ParamParser, QueryResultWriter,
     StatementMetaWriter,
 };
-use mysql::DriverError;
 use mysql::OptsBuilder;
 use mysql::SslOpts;
 use mysql::{prelude::*, MySqlError};
 #[cfg(unix)]
+#[cfg(feature = "tls")]
 use openssl::{
     asn1::Asn1Time,
     bn::{BigNum, MsbOption},
@@ -22,7 +22,7 @@ use openssl::{
     pkcs12::Pkcs12,
     pkey::{PKey, Private},
     rsa::Rsa,
-    x509::{extension::SubjectKeyIdentifier, X509NameBuilder, X509},
+    x509::{extension::SubjectKeyIdentifier, X509},
 };
 #[cfg(feature = "tls")]
 use rcgen::generate_simple_self_signed;
@@ -31,14 +31,11 @@ use rustls::{
     server::AllowAnyAuthenticatedClient, Certificate, PrivateKey, RootCertStore, ServerConfig,
 };
 use std::error::Error;
-use std::fs::File;
 use std::io;
-use std::io::Write;
 use std::net;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::thread;
-use tempfile::NamedTempFile;
 
 struct TestingShim<Q, P, E, I, A> {
     columns: Vec<Column>,
@@ -51,7 +48,8 @@ struct TestingShim<Q, P, E, I, A> {
     #[cfg(feature = "tls")]
     server_tls: Option<std::sync::Arc<rustls::ServerConfig>>,
     client_tls: Option<SslOpts>,
-    client_cert_pkcs12_file: Option<Arc<NamedTempFile>>,
+    #[cfg(feature = "tls")]
+    client_cert_pkcs12_file: Option<Arc<tempfile::NamedTempFile>>,
 }
 
 impl<Q, P, E, I, A> MysqlShim<net::TcpStream> for TestingShim<Q, P, E, I, A>
@@ -128,6 +126,7 @@ where
             #[cfg(feature = "tls")]
             server_tls: None,
             client_tls: None,
+            #[cfg(feature = "tls")]
             client_cert_pkcs12_file: None,
         }
     }
@@ -143,17 +142,17 @@ where
     }
 
     #[cfg(unix)]
+    #[cfg(feature = "tls")]
     fn with_tls(mut self, client: bool, server: bool, use_client_certs: bool) -> Self {
-        #[cfg(feature = "tls")]
+        use std::fs::File;
+        use std::io::Write;
+
         let mut client_cert_der = None;
 
         if use_client_certs {
             let (client_cert, client_pkey) = mk_client_cert().unwrap();
 
-            #[cfg(feature = "tls")]
-            {
-                client_cert_der = Some(Certificate(client_cert.to_der().unwrap()));
-            }
+            client_cert_der = Some(Certificate(client_cert.to_der().unwrap()));
 
             // Set up client cert der12 file.
             let client_cert_pkcs12_file = Arc::new(tempfile::NamedTempFile::new().unwrap());
@@ -252,6 +251,7 @@ where
     }
 }
 
+#[cfg(feature = "tls")]
 fn mk_client_cert() -> Result<(X509, PKey<Private>), ErrorStack> {
     let key_pair = PKey::from_rsa(Rsa::generate(2048)?)?;
 
@@ -282,29 +282,28 @@ fn mk_client_cert() -> Result<(X509, PKey<Private>), ErrorStack> {
 
 #[test]
 fn it_connects() {
-    let auth_context = Arc::new(Mutex::new((None, None)));
-    let auth_context1 = Arc::clone(&auth_context);
+    let username = Arc::new(Mutex::new(None));
+    let username1 = Arc::clone(&username);
     TestingShim::new(
         |_, _| unreachable!(),
         |_| unreachable!(),
         |_, _, _| unreachable!(),
         |_, _| unreachable!(),
         move |a| {
-            let mut ac = auth_context1.lock().unwrap();
-            assert_eq!(*ac, (None, None));
-            *ac = (a.username.clone(), a.tls_client_certs.map(|x| x.to_vec()));
+            let mut ac = username1.lock().unwrap();
+            assert_eq!(*ac, None);
+            *ac = a.username.clone();
             Ok(())
         },
     )
     .test(|_| {});
 
-    let ac = auth_context.lock().unwrap();
-    assert_eq!(ac.0, Some(b"username".to_vec()));
-    assert_eq!(ac.1, None);
+    let username = username.lock().unwrap();
+    assert_eq!(*username, Some(b"username".to_vec()));
 }
 
-#[cfg(feature = "tls")]
 #[cfg(unix)]
+#[cfg(feature = "tls")]
 fn tls_test_common(
     enable_client_tls: bool,
     enable_server_tls: bool,
@@ -361,6 +360,7 @@ fn it_connects_tls_both_with_client_certs() {
 }
 
 #[test]
+#[cfg(feature = "tls")]
 #[cfg(unix)]
 fn it_does_not_connect_tls_client_only() {
     // Client requesting tls fails as expected when server does not support it.
@@ -368,7 +368,9 @@ fn it_does_not_connect_tls_client_only() {
     assert!(
         matches!(
             e.downcast_ref::<mysql::Error>(),
-            Some(mysql::Error::DriverError(DriverError::TlsNotSupported))
+            Some(mysql::Error::DriverError(
+                mysql::DriverError::TlsNotSupported
+            ))
         ),
         "unexpected error {:?}",
         e

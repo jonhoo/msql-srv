@@ -214,6 +214,8 @@ pub struct AuthenticationContext<'a> {
     #[cfg(feature = "tls")]
     /// The TLS certificate chain presented by the client.
     pub tls_client_certs: Option<&'a [rustls::Certificate]>,
+    #[cfg(not(feature = "tls"))]
+    _pd: Option<&'a std::marker::PhantomData<()>>,
 }
 
 /// A server that speaks the MySQL/MariaDB protocol, and can delegate client commands to a backend
