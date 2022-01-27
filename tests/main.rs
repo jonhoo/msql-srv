@@ -12,8 +12,7 @@ use msql_srv::{
 use mysql::OptsBuilder;
 use mysql::SslOpts;
 use mysql::{prelude::*, MySqlError};
-#[cfg(unix)]
-#[cfg(feature = "tls")]
+#[cfg(all(feature = "tls", unix))]
 use openssl::{
     asn1::Asn1Time,
     bn::{BigNum, MsbOption},
@@ -24,11 +23,9 @@ use openssl::{
     rsa::Rsa,
     x509::{extension::SubjectKeyIdentifier, X509},
 };
-#[cfg(feature = "tls")]
-#[cfg(unix)]
+#[cfg(all(feature = "tls", unix))]
 use rcgen::generate_simple_self_signed;
-#[cfg(feature = "tls")]
-#[cfg(unix)]
+#[cfg(all(feature = "tls", unix))]
 use rustls::{
     server::AllowAnyAuthenticatedClient, Certificate, PrivateKey, RootCertStore, ServerConfig,
 };
@@ -50,8 +47,7 @@ struct TestingShim<Q, P, E, I, A> {
     #[cfg(feature = "tls")]
     server_tls: Option<std::sync::Arc<rustls::ServerConfig>>,
     client_tls: Option<SslOpts>,
-    #[cfg(feature = "tls")]
-    #[cfg(unix)]
+    #[cfg(all(feature = "tls", unix))]
     client_cert_pkcs12_file: Option<Arc<tempfile::NamedTempFile>>,
 }
 
@@ -129,8 +125,7 @@ where
             #[cfg(feature = "tls")]
             server_tls: None,
             client_tls: None,
-            #[cfg(feature = "tls")]
-            #[cfg(unix)]
+            #[cfg(all(feature = "tls", unix))]
             client_cert_pkcs12_file: None,
         }
     }
@@ -145,8 +140,7 @@ where
         self
     }
 
-    #[cfg(unix)]
-    #[cfg(feature = "tls")]
+    #[cfg(all(feature = "tls", unix))]
     fn with_tls(mut self, client: bool, server: bool, use_client_certs: bool) -> Self {
         use std::fs::File;
         use std::io::Write;
@@ -172,12 +166,6 @@ where
             f.flush().unwrap();
         }
 
-        #[cfg(not(feature = "tls"))]
-        if server {
-            panic!("a test is asking for tls support in the server, but we don't have the tls feature enabled.");
-        }
-
-        #[cfg(feature = "tls")]
         if server {
             let cert = generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
 
@@ -255,8 +243,7 @@ where
     }
 }
 
-#[cfg(feature = "tls")]
-#[cfg(unix)]
+#[cfg(all(feature = "tls", unix))]
 fn mk_client_cert() -> Result<(X509, PKey<Private>), ErrorStack> {
     let key_pair = PKey::from_rsa(Rsa::generate(2048)?)?;
 
@@ -307,8 +294,7 @@ fn it_connects() {
     assert_eq!(*username, Some(b"username".to_vec()));
 }
 
-#[cfg(unix)]
-#[cfg(feature = "tls")]
+#[cfg(all(feature = "tls", unix))]
 fn tls_test_common(
     enable_client_tls: bool,
     enable_server_tls: bool,
@@ -335,8 +321,7 @@ fn tls_test_common(
 }
 
 #[test]
-#[cfg(feature = "tls")]
-#[cfg(unix)]
+#[cfg(all(feature = "tls", unix))]
 fn it_connects_tls_server_only() {
     // Client can connect ok without SSL when SSL is enabled on the server.
     let (username, certs) = tls_test_common(false, true, false).unwrap();
@@ -345,8 +330,7 @@ fn it_connects_tls_server_only() {
 }
 
 #[test]
-#[cfg(feature = "tls")]
-#[cfg(unix)]
+#[cfg(all(feature = "tls", unix))]
 fn it_connects_tls_both_no_client_certs() {
     // SSL connection when ssl enabled on server and used by client, client not passing certs to the server.
     let (username, certs) = tls_test_common(true, true, false).unwrap();
@@ -355,8 +339,7 @@ fn it_connects_tls_both_no_client_certs() {
 }
 
 #[test]
-#[cfg(feature = "tls")]
-#[cfg(unix)]
+#[cfg(all(feature = "tls", unix))]
 fn it_connects_tls_both_with_client_certs() {
     // SSL connection when ssl enabled on server and used by client, with the client passing certs to the server.
     let (username, certs) = tls_test_common(true, true, true).unwrap();
@@ -365,8 +348,7 @@ fn it_connects_tls_both_with_client_certs() {
 }
 
 #[test]
-#[cfg(feature = "tls")]
-#[cfg(unix)]
+#[cfg(all(feature = "tls", unix))]
 fn it_does_not_connect_tls_client_only() {
     // Client requesting tls fails as expected when server does not support it.
     let e = tls_test_common(true, false, false).expect_err("client should not have connected");
