@@ -253,15 +253,10 @@ where
 }
 
 fn mk_client_cert() -> Result<(X509, PKey<Private>), ErrorStack> {
-    let rsa = Rsa::generate(2048)?;
-    let key_pair = PKey::from_rsa(rsa)?;
-
-    let mut x509_name = X509NameBuilder::new()?;
-    x509_name.append_entry_by_text("C", "US")?;
-    x509_name.append_entry_by_text("CN", "localhost")?;
-    let x509_name = x509_name.build();
+    let key_pair = PKey::from_rsa(Rsa::generate(2048)?)?;
 
     let mut cert_builder = X509::builder()?;
+
     cert_builder.set_version(2)?;
     let serial_number = {
         let mut serial = BigNum::new()?;
@@ -269,8 +264,6 @@ fn mk_client_cert() -> Result<(X509, PKey<Private>), ErrorStack> {
         serial.to_asn1_integer()?
     };
     cert_builder.set_serial_number(&serial_number)?;
-    cert_builder.set_subject_name(&x509_name)?;
-    cert_builder.set_issuer_name(&x509_name)?;
     cert_builder.set_pubkey(&key_pair)?;
     let not_before = Asn1Time::days_from_now(0)?;
     cert_builder.set_not_before(&not_before)?;
