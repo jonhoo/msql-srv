@@ -516,21 +516,21 @@ fn multi_result() {
         let mut result = db
             .query_iter("SELECT a FROM foo; SELECT a FROM foo")
             .unwrap();
-        let mut set = result.next_set().unwrap().unwrap();
+        let mut set = result.iter().unwrap();
         let row1: Vec<_> = set
             .by_ref()
             .filter_map(|row| row.unwrap().get::<i16, _>(0))
             .collect();
         assert_eq!(row1, vec![1024]);
         drop(set);
-        let mut set = result.next_set().unwrap().unwrap();
+        let mut set = result.iter().unwrap();
         let row2: Vec<_> = set
             .by_ref()
             .filter_map(|row| row.unwrap().get::<i16, _>(0))
             .collect();
         assert_eq!(row2, vec![1025]);
         drop(set);
-        assert!(result.next_set().is_none());
+        assert!(result.iter().is_none());
     })
 }
 
