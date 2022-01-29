@@ -95,15 +95,7 @@ impl<R: Read + Write> PacketConn<R> {
 
         loop {
             if self.remaining != 0 {
-                let bytes = {
-                    // NOTE: this is all sorts of unfortunate. what we really want to do is to give
-                    // &self.bytes[self.start..] to `packet()`, and the lifetimes should all work
-                    // out. however, without NLL, borrowck doesn't realize that self.bytes is no
-                    // longer borrowed after the match, and so can be mutated.
-                    let bytes = &self.bytes[self.start..];
-                    unsafe { ::std::slice::from_raw_parts(bytes.as_ptr(), bytes.len()) }
-                };
-                match packet(bytes) {
+                match packet(&self.bytes[self.start..]) {
                     Ok((rest, p)) => {
                         self.remaining = rest.len();
                         return Ok(Some(p));
