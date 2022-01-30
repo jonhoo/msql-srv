@@ -1,6 +1,6 @@
 use byteorder::{ByteOrder, LittleEndian};
 #[cfg(feature = "tls")]
-use rustls::ServerConfig;
+use rustls::{Certificate, ServerConfig};
 use std::io;
 use std::io::prelude::*;
 
@@ -82,6 +82,14 @@ impl<W: Read + Write> PacketConn<W> {
             .switch_to_tls(config, &self.bytes[self.bytes.len() - self.remaining..]);
         self.remaining = 0;
         res
+    }
+
+    #[cfg(feature = "tls")]
+    pub fn tls_certs(&self) -> Option<&[Certificate]> {
+        match &self.rw.0 {
+            Some(tls::EitherConn::Tls(tls_conn)) => tls_conn.conn.peer_certificates(),
+            _ => None,
+        }
     }
 }
 

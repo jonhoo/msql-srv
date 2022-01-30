@@ -6,7 +6,7 @@ pub struct ClientHandshake<'a> {
     pub capabilities: CapabilityFlags,
     maxps: u32,
     collation: u16,
-    username: Option<&'a [u8]>,
+    pub(crate) username: Option<&'a [u8]>,
 }
 
 pub fn client_handshake(i: &[u8], after_tls: bool) -> nom::IResult<&[u8], ClientHandshake<'_>> {

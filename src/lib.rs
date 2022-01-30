@@ -195,6 +195,27 @@ pub trait MysqlShim<W: Read + Write> {
     fn tls_config(&self) -> Option<std::sync::Arc<rustls::ServerConfig>> {
         None
     }
+
+    /// Called after successful authentication (including TLS if applicable) passing relevant
+    /// information to allow additional logic in the MySqlShim implementation.
+    fn after_authentication(
+        &mut self,
+        _context: &AuthenticationContext<'_>,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+/// Information about an authenticated user
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct AuthenticationContext<'a> {
+    /// The username exactly as passed by the client,
+    pub username: Option<Vec<u8>>,
+    #[cfg(feature = "tls")]
+    /// The TLS certificate chain presented by the client.
+    pub tls_client_certs: Option<&'a [rustls::Certificate]>,
+    #[cfg(not(feature = "tls"))]
+    _pd: Option<&'a std::marker::PhantomData<()>>,
 }
 
 /// A server that speaks the MySQL/MariaDB protocol, and can delegate client commands to a backend
@@ -265,6 +286,8 @@ impl<B: MysqlShim<RW>, RW: Read + Write> MysqlIntermediary<B, RW> {
         self.rw.write_all(&b">o6^Wz!/kM}N\0"[..])?; // 4.1+ servers must extend salt
         self.rw.flush()?;
 
+        let mut auth_context = AuthenticationContext::default();
+
         {
             let (seq, handshake) = self.rw.next()?.ok_or_else(|| {
                 io::Error::new(
@@ -300,6 +323,8 @@ impl<B: MysqlShim<RW>, RW: Read + Write> MysqlIntermediary<B, RW> {
                 })?
                 .1;
 
+            auth_context.username = handshake.username.map(|x| x.to_vec());
+
             self.rw.set_seq(seq + 1);
 
             #[cfg(not(feature = "tls"))]
@@ -328,7 +353,8 @@ impl<B: MysqlShim<RW>, RW: Read + Write> MysqlIntermediary<B, RW> {
                         "peer terminated connection",
                     )
                 })?;
-                let _handshake = commands::client_handshake(&handshake, true)
+
+                let handshake = commands::client_handshake(&handshake, true)
                     .map_err(|e| match e {
                         nom::Err::Incomplete(_) => io::Error::new(
                             io::ErrorKind::UnexpectedEof,
@@ -356,7 +382,21 @@ impl<B: MysqlShim<RW>, RW: Read + Write> MysqlIntermediary<B, RW> {
                     })?
                     .1;
 
+                auth_context.username = handshake.username.map(|x| x.to_vec());
+
                 self.rw.set_seq(seq + 1);
+
+                auth_context.tls_client_certs = self.rw.tls_certs();
+            }
+
+            if let Err(e) = self.shim.after_authentication(&auth_context) {
+                writers::write_err(
+                    ErrorKind::ER_ACCESS_DENIED_ERROR,
+                    "client authentication failed".as_ref(),
+                    &mut self.rw,
+                )?;
+                self.rw.flush()?;
+                return Err(e);
             }
         }
 

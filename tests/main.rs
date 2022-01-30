@@ -4,43 +4,64 @@ extern crate mysql;
 extern crate mysql_common as myc;
 extern crate nom;
 
+use msql_srv::AuthenticationContext;
+use msql_srv::{
+    Column, ErrorKind, InitWriter, MysqlIntermediary, MysqlShim, ParamParser, QueryResultWriter,
+    StatementMetaWriter,
+};
 use mysql::prelude::*;
-use mysql::DriverError;
+use mysql::MySqlError;
 use mysql::OptsBuilder;
 use mysql::SslOpts;
-#[cfg(feature = "tls")]
-use rustls::{Certificate, PrivateKey, ServerConfig};
+#[cfg(all(feature = "tls", unix))]
+use openssl::{
+    asn1::Asn1Time,
+    bn::{BigNum, MsbOption},
+    error::ErrorStack,
+    hash::MessageDigest,
+    pkcs12::Pkcs12,
+    pkey::{PKey, Private},
+    rsa::Rsa,
+    x509::{extension::SubjectKeyIdentifier, X509},
+};
+#[cfg(all(feature = "tls", unix))]
+use rcgen::generate_simple_self_signed;
+#[cfg(all(feature = "tls", unix))]
+use rustls::{
+    server::AllowAnyAuthenticatedClient, Certificate, PrivateKey, RootCertStore, ServerConfig,
+};
 use std::error::Error;
 use std::io;
 use std::io::Read;
 use std::io::Write;
 use std::net;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
-use msql_srv::{
-    Column, ErrorKind, InitWriter, MysqlIntermediary, MysqlShim, ParamParser, QueryResultWriter,
-    StatementMetaWriter,
-};
-
-struct TestingShim<Q, P, E, I> {
+struct TestingShim<Q, P, E, I, A> {
     columns: Vec<Column>,
     params: Vec<Column>,
     on_q: Q,
     on_p: P,
     on_e: E,
     on_i: I,
+    after_auth: A,
     #[cfg(feature = "tls")]
     server_tls: Option<std::sync::Arc<rustls::ServerConfig>>,
     client_tls: Option<SslOpts>,
+    #[cfg(all(feature = "tls", unix))]
+    client_cert_pkcs12_file: Option<Arc<tempfile::NamedTempFile>>,
 }
 
-impl<Q, P, E, I> MysqlShim<net::TcpStream> for TestingShim<Q, P, E, I>
+impl<Q, P, E, I, A> MysqlShim<net::TcpStream> for TestingShim<Q, P, E, I, A>
 where
     Q: FnMut(&str, QueryResultWriter<net::TcpStream>) -> io::Result<()>,
     P: FnMut(&str) -> u32,
     E: FnMut(u32, Vec<msql_srv::ParamValue>, QueryResultWriter<net::TcpStream>) -> io::Result<()>,
     I: FnMut(&str, InitWriter<net::TcpStream>) -> io::Result<()>,
+    A: FnMut(&AuthenticationContext) -> io::Result<()>,
 {
     type Error = io::Error;
 
@@ -80,9 +101,13 @@ where
     fn tls_config(&self) -> Option<std::sync::Arc<rustls::ServerConfig>> {
         self.server_tls.as_ref().map(std::sync::Arc::clone)
     }
+
+    fn after_authentication(&mut self, auth_context: &AuthenticationContext) -> io::Result<()> {
+        (self.after_auth)(auth_context)
+    }
 }
 
-impl<Q, P, E, I> TestingShim<Q, P, E, I>
+impl<Q, P, E, I, T> TestingShim<Q, P, E, I, T>
 where
     Q: 'static + Send + FnMut(&str, QueryResultWriter<net::TcpStream>) -> io::Result<()>,
     P: 'static + Send + FnMut(&str) -> u32,
@@ -90,8 +115,9 @@ where
         + Send
         + FnMut(u32, Vec<msql_srv::ParamValue>, QueryResultWriter<net::TcpStream>) -> io::Result<()>,
     I: 'static + Send + FnMut(&str, InitWriter<net::TcpStream>) -> io::Result<()>,
+    T: 'static + Send + FnMut(&AuthenticationContext) -> io::Result<()>,
 {
-    fn new(on_q: Q, on_p: P, on_e: E, on_i: I) -> Self {
+    fn new(on_q: Q, on_p: P, on_e: E, on_i: I, after_auth: T) -> Self {
         TestingShim {
             columns: Vec::new(),
             params: Vec::new(),
@@ -99,9 +125,12 @@ where
             on_p,
             on_e,
             on_i,
+            after_auth,
             #[cfg(feature = "tls")]
             server_tls: None,
             client_tls: None,
+            #[cfg(all(feature = "tls", unix))]
+            client_cert_pkcs12_file: None,
         }
     }
 
@@ -115,26 +144,69 @@ where
         self
     }
 
-    #[cfg(feature = "tls")]
-    fn with_server_tls(mut self) -> Self {
-        let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+    #[cfg(all(feature = "tls", unix))]
+    fn with_tls(mut self, client: bool, server: bool, use_client_certs: bool) -> Self {
+        use std::fs::File;
+        use std::io::Write;
 
-        self.server_tls = Some(std::sync::Arc::new(
-            ServerConfig::builder()
-                .with_safe_defaults()
-                .with_no_client_auth()
-                .with_single_cert(
-                    vec![Certificate(cert.serialize_der().unwrap())],
-                    PrivateKey(cert.get_key_pair().serialize_der()),
-                )
-                .unwrap(),
-        ));
+        use mysql::ClientIdentity;
 
-        self
-    }
+        let mut client_cert_der = None;
 
-    fn with_client_tls(mut self) -> Self {
-        self.client_tls = Some(SslOpts::default().with_danger_accept_invalid_certs(true));
+        if use_client_certs {
+            let (client_cert, client_pkey) = mk_client_cert().unwrap();
+
+            client_cert_der = Some(Certificate(client_cert.to_der().unwrap()));
+
+            // Set up client cert der12 file.
+            let client_cert_pkcs12_file = Arc::new(tempfile::NamedTempFile::new().unwrap());
+            self.client_cert_pkcs12_file = Some(Arc::clone(&client_cert_pkcs12_file));
+
+            let pkcs12 = Pkcs12::builder()
+                .build("password", "friendly_name", &client_pkey, &client_cert)
+                .unwrap();
+            let der = pkcs12.to_der().unwrap();
+
+            let mut f = File::create(&*client_cert_pkcs12_file).unwrap();
+            f.write(&der).unwrap();
+            f.flush().unwrap();
+        }
+
+        if server {
+            let cert = generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+
+            let builder = ServerConfig::builder().with_safe_defaults();
+
+            let builder = if let Some(client_cert_der) = client_cert_der {
+                let mut client_auth_roots = RootCertStore::empty();
+
+                client_auth_roots.add(&client_cert_der).unwrap();
+
+                let client_auth = AllowAnyAuthenticatedClient::new(client_auth_roots);
+
+                builder.with_client_cert_verifier(client_auth)
+            } else {
+                builder.with_no_client_auth()
+            }
+            .with_single_cert(
+                vec![Certificate(cert.serialize_der().unwrap())],
+                PrivateKey(cert.get_key_pair().serialize_der()),
+            )
+            .unwrap();
+
+            self.server_tls = Some(std::sync::Arc::new(builder));
+        }
+
+        if client {
+            self.client_tls = Some(
+                SslOpts::default()
+                    .with_danger_accept_invalid_certs(true)
+                    .with_client_identity(self.client_cert_pkcs12_file.as_ref().map(|x| {
+                        ClientIdentity::new(x.path().to_owned()).with_password("password")
+                    })),
+            );
+        }
+
         self
     }
 
@@ -160,6 +232,7 @@ where
 
         let opts = OptsBuilder::default()
             .ip_or_hostname(Some("localhost"))
+            .user(Some("username"))
             .tcp_port(port)
             .ssl_opts(client_tls);
 
@@ -173,48 +246,112 @@ where
     }
 }
 
+#[cfg(all(feature = "tls", unix))]
+fn mk_client_cert() -> Result<(X509, PKey<Private>), ErrorStack> {
+    let key_pair = PKey::from_rsa(Rsa::generate(2048)?)?;
+
+    let mut cert_builder = X509::builder()?;
+
+    cert_builder.set_version(2)?;
+    let serial_number = {
+        let mut serial = BigNum::new()?;
+        serial.rand(159, MsbOption::MAYBE_ZERO, false)?;
+        serial.to_asn1_integer()?
+    };
+    cert_builder.set_serial_number(&serial_number)?;
+    cert_builder.set_pubkey(&key_pair)?;
+    let not_before = Asn1Time::days_from_now(0)?;
+    cert_builder.set_not_before(&not_before)?;
+    let not_after = Asn1Time::days_from_now(365)?;
+    cert_builder.set_not_after(&not_after)?;
+
+    let subject_key_identifier =
+        SubjectKeyIdentifier::new().build(&cert_builder.x509v3_context(None, None))?;
+    cert_builder.append_extension(subject_key_identifier)?;
+
+    cert_builder.sign(&key_pair, MessageDigest::sha256())?;
+    let cert = cert_builder.build();
+
+    Ok((cert, key_pair))
+}
+
 #[test]
 fn it_connects() {
+    let username = Arc::new(Mutex::new(None));
+    let username1 = Arc::clone(&username);
     TestingShim::new(
         |_, _| unreachable!(),
         |_| unreachable!(),
         |_, _, _| unreachable!(),
         |_, _| unreachable!(),
+        move |a| {
+            let mut ac = username1.lock().unwrap();
+            assert_eq!(*ac, None);
+            *ac = a.username.clone();
+            Ok(())
+        },
     )
     .test(|_| {});
+
+    let username = username.lock().unwrap();
+    assert_eq!(*username, Some(b"username".to_vec()));
+}
+
+#[cfg(all(feature = "tls", unix))]
+fn tls_test_common(
+    enable_client_tls: bool,
+    enable_server_tls: bool,
+    use_client_certs: bool,
+) -> Result<(Option<Vec<u8>>, Option<Vec<Certificate>>), Box<dyn Error + 'static>> {
+    let auth_context = Arc::new(Mutex::new((None, None)));
+    let auth_context1 = Arc::clone(&auth_context);
+    TestingShim::new(
+        |_, _| unreachable!(),
+        |_| unreachable!(),
+        |_, _, _| unreachable!(),
+        |_, _| unreachable!(),
+        move |a| {
+            let mut ac = auth_context1.lock().unwrap();
+            assert_eq!(*ac, (None, None));
+            *ac = (a.username.clone(), a.tls_client_certs.map(|x| x.to_vec()));
+            Ok(())
+        },
+    )
+    .with_tls(enable_client_tls, enable_server_tls, use_client_certs)
+    .test_with_result(|_| {})?;
+
+    Ok(Arc::try_unwrap(auth_context).unwrap().into_inner().unwrap())
 }
 
 #[test]
-#[cfg(feature = "tls")]
+#[cfg(all(feature = "tls", unix))]
 fn it_connects_tls_server_only() {
     // Client can connect ok without SSL when SSL is enabled on the server.
-    TestingShim::new(
-        |_, _| unreachable!(),
-        |_| unreachable!(),
-        |_, _, _| unreachable!(),
-        |_, _| unreachable!(),
-    )
-    .with_server_tls()
-    .test(|_| {})
+    let (username, certs) = tls_test_common(false, true, false).unwrap();
+    assert_eq!(username, Some(b"username".to_vec()));
+    assert_eq!(certs, None);
 }
 
 #[test]
-#[cfg(feature = "tls")]
-fn it_connects_tls_both() {
-    // SSL connection when ssl enabled on server and used by client
-    TestingShim::new(
-        |_, _| unreachable!(),
-        |_| unreachable!(),
-        |_, _, _| unreachable!(),
-        |_, _| unreachable!(),
-    )
-    .with_server_tls()
-    .with_client_tls()
-    .test(|_| {})
+#[cfg(all(feature = "tls", unix))]
+fn it_connects_tls_both_no_client_certs() {
+    // SSL connection when ssl enabled on server and used by client, client not passing certs to the server.
+    let (username, certs) = tls_test_common(true, true, false).unwrap();
+    assert_eq!(username, Some(b"username".to_vec()));
+    assert_eq!(certs, None);
 }
 
 #[test]
-#[cfg(feature = "tls")]
+#[cfg(all(feature = "tls", unix))]
+fn it_connects_tls_both_with_client_certs() {
+    // SSL connection when ssl enabled on server and used by client, with the client passing certs to the server.
+    let (username, certs) = tls_test_common(true, true, true).unwrap();
+    assert_eq!(username, Some(b"username".to_vec()));
+    assert!(!certs.expect("expected client certs").is_empty());
+}
+
+#[test]
+#[cfg(all(feature = "tls", unix))]
 fn it_connects_tls_both_with_delayed_server_read() {
     // This test is to ensure correctly handle the case when we read both the pre-TLS data as well
     // as (at least part of) the TLS handshake into our the buffer.  When that happens, we need to
@@ -319,24 +456,46 @@ impl<RW: Read + Write> Write for DelayedReadRW<RW> {
         self.s.flush()
     }
 }
+
 #[test]
+#[cfg(all(feature = "tls", unix))]
 fn it_does_not_connect_tls_client_only() {
     // Client requesting tls fails as expected when server does not support it.
+    let e = tls_test_common(true, false, false).expect_err("client should not have connected");
+    assert!(
+        matches!(
+            e.downcast_ref::<mysql::Error>(),
+            Some(mysql::Error::DriverError(
+                mysql::DriverError::TlsNotSupported
+            ))
+        ),
+        "unexpected error {:?}",
+        e
+    );
+}
 
+#[test]
+fn it_fails_correctly_on_after_auth_error() {
     let e = TestingShim::new(
         |_, _| unreachable!(),
         |_| unreachable!(),
         |_, _, _| unreachable!(),
         |_, _| unreachable!(),
+        move |_| Err(io::Error::new(io::ErrorKind::Other, "")),
     )
-    .with_client_tls()
     .test_with_result(|_| {})
     .expect_err("client should not have connected");
+
+    let expected = MySqlError {
+        state: "28000".to_owned(),
+        message: "client authentication failed".to_owned(),
+        code: 1045,
+    };
 
     assert!(
         matches!(
             e.downcast_ref::<mysql::Error>(),
-            Some(mysql::Error::DriverError(DriverError::TlsNotSupported))
+            Some(mysql::Error::MySqlError(m)) if m == &expected,
         ),
         "unexpected error {:?}",
         e
@@ -353,6 +512,7 @@ fn it_inits_ok() {
             assert_eq!(schema, "test");
             writer.ok()
         },
+        |_| Ok(()),
     )
     .test(|db| assert_eq!(true, db.select_db("test")));
 }
@@ -370,6 +530,7 @@ fn it_inits_error() {
                 format!("Database {} not found", schema).as_bytes(),
             )
         },
+        |_| Ok(()),
     )
     .test(|db| assert_eq!(false, db.select_db("test")));
 }
@@ -384,6 +545,7 @@ fn it_inits_on_use_query_ok() {
             assert_eq!(schema, "test");
             writer.ok()
         },
+        |_| Ok(()),
     )
     .test(|db| match db.query_drop("USE `test`;") {
         Ok(_) => assert!(true),
@@ -398,6 +560,7 @@ fn it_pings() {
         |_| unreachable!(),
         |_, _, _| unreachable!(),
         |_, _| unreachable!(),
+        |_| Ok(()),
     )
     .test(|db| assert_eq!(db.ping(), true))
 }
@@ -409,6 +572,7 @@ fn empty_response() {
         |_| unreachable!(),
         |_, _, _| unreachable!(),
         |_, _| unreachable!(),
+        |_| Ok(()),
     )
     .test(|db| {
         assert_eq!(db.query_iter("SELECT a, b FROM foo").unwrap().count(), 0);
@@ -428,6 +592,7 @@ fn no_rows() {
         |_| unreachable!(),
         |_, _, _| unreachable!(),
         |_, _| unreachable!(),
+        |_| Ok(()),
     )
     .test(|db| {
         assert_eq!(db.query_iter("SELECT a, b FROM foo").unwrap().count(), 0);
@@ -441,6 +606,7 @@ fn no_columns() {
         |_| unreachable!(),
         |_, _, _| unreachable!(),
         |_, _| unreachable!(),
+        |_| Ok(()),
     )
     .test(|db| {
         assert_eq!(db.query_iter("SELECT a, b FROM foo").unwrap().count(), 0);
@@ -454,6 +620,7 @@ fn no_columns_but_rows() {
         |_| unreachable!(),
         |_, _, _| unreachable!(),
         |_, _| unreachable!(),
+        |_| Ok(()),
     )
     .test(|db| {
         assert_eq!(db.query_iter("SELECT a, b FROM foo").unwrap().count(), 0);
@@ -468,6 +635,7 @@ fn error_response() {
         |_| unreachable!(),
         |_, _, _| unreachable!(),
         |_, _| unreachable!(),
+        |_| Ok(()),
     )
     .test(|db| {
         if let mysql::Error::MySqlError(e) = db.query_iter("SELECT a, b FROM foo").unwrap_err() {
@@ -503,6 +671,7 @@ fn error_in_result_set_response() {
         |_| unreachable!(),
         |_, _, _| unreachable!(),
         |_, _| unreachable!(),
+        |_| Ok(()),
     )
     .test(|db| {
         let mut result = db.query_iter("SELECT a FROM foo").unwrap();
@@ -536,6 +705,7 @@ fn empty_on_drop() {
         |_| unreachable!(),
         |_, _, _| unreachable!(),
         |_, _| unreachable!(),
+        |_| Ok(()),
     )
     .test(|db| {
         assert_eq!(db.query_iter("SELECT a, b FROM foo").unwrap().count(), 0);
@@ -559,6 +729,7 @@ fn it_queries_nulls() {
         |_| unreachable!(),
         |_, _, _| unreachable!(),
         |_, _| unreachable!(),
+        |_| Ok(()),
     )
     .test(|db| {
         let row = db
@@ -588,6 +759,7 @@ fn it_queries() {
         |_| unreachable!(),
         |_, _, _| unreachable!(),
         |_, _| unreachable!(),
+        |_| Ok(()),
     )
     .test(|db| {
         let row = db
@@ -620,6 +792,7 @@ fn multi_result() {
         |_| unreachable!(),
         |_, _, _| unreachable!(),
         |_, _| unreachable!(),
+        |_| Ok(()),
     )
     .test(|db| {
         let mut result = db
@@ -671,6 +844,7 @@ fn it_queries_many_rows() {
         |_| unreachable!(),
         |_, _, _| unreachable!(),
         |_, _| unreachable!(),
+        |_| Ok(()),
     )
     .test(|db| {
         let mut rows = 0;
@@ -721,6 +895,7 @@ fn it_prepares() {
             w.finish()
         },
         |_, _| unreachable!(),
+        |_| Ok(()),
     )
     .with_params(params)
     .with_columns(cols2)
@@ -832,6 +1007,7 @@ fn insert_exec() {
             w.completed(42, 1)
         },
         |_, _| unreachable!(),
+        |_| Ok(()),
     )
     .with_params(params)
     .test(|db| {
@@ -894,6 +1070,7 @@ fn send_long() {
             w.finish()
         },
         |_, _| unreachable!(),
+        |_| Ok(()),
     )
     .with_params(params)
     .with_columns(cols2)
@@ -944,6 +1121,7 @@ fn it_prepares_many() {
             w.finish()
         },
         |_, _| unreachable!(),
+        |_| Ok(()),
     )
     .with_params(Vec::new())
     .with_columns(cols2)
@@ -983,6 +1161,7 @@ fn prepared_empty() {
             w.completed(0, 0)
         },
         |_, _| unreachable!(),
+        |_| Ok(()),
     )
     .with_params(params)
     .with_columns(cols2)
@@ -1017,6 +1196,7 @@ fn prepared_no_params() {
             w.finish()
         },
         |_, _| unreachable!(),
+        |_| Ok(()),
     )
     .with_params(params)
     .with_columns(cols2)
@@ -1081,6 +1261,7 @@ fn prepared_nulls() {
             w.finish()
         },
         |_, _| unreachable!(),
+        |_| Ok(()),
     )
     .with_params(params)
     .with_columns(cols2)
@@ -1113,6 +1294,7 @@ fn prepared_no_rows() {
         |_| 0,
         move |_, _, w| w.start(&cols[..])?.finish(),
         |_, _| unreachable!(),
+        |_| Ok(()),
     )
     .with_columns(cols2)
     .test(|db| {
@@ -1127,6 +1309,7 @@ fn prepared_no_cols_but_rows() {
         |_| 0,
         move |_, _, w| w.start(&[])?.write_col(42).map(|_| ()),
         |_, _| unreachable!(),
+        |_| Ok(()),
     )
     .test(|db| {
         assert_eq!(db.exec_iter("SELECT a, b FROM foo", ()).unwrap().count(), 0);
@@ -1140,6 +1323,7 @@ fn prepared_no_cols() {
         |_| 0,
         move |_, _, w| w.start(&[])?.finish(),
         |_, _| unreachable!(),
+        |_| Ok(()),
     )
     .test(|db| {
         assert_eq!(db.exec_iter("SELECT a, b FROM foo", ()).unwrap().count(), 0);
@@ -1157,6 +1341,7 @@ fn really_long_query() {
         |_| 0,
         |_, _, _| unreachable!(),
         |_, _| unreachable!(),
+        |_| Ok(()),
     )
     .test(move |db| {
         db.query_iter(long).unwrap();

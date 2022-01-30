@@ -41,3 +41,8 @@ slab = "0.4.2"
 tokio = { version = "1.15.0", features = ["full"] }
 futures = "0.3.0"
 rcgen = "0.8.14"
+tempfile = "3.3.0"
+native-tls = "0.2.8"
+
+[target.'cfg(unix)'.dev-dependencies]
+openssl = "0.10.38"
