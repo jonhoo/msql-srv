@@ -216,6 +216,10 @@ fn it_connects_tls_both() {
 #[test]
 #[cfg(feature = "tls")]
 fn it_connects_tls_both_with_delayed_server_read() {
+    // This test is to ensure correctly handle the case when we read both the pre-TLS data as well
+    // as (at least part of) the TLS handshake into our the buffer.  When that happens, we need to
+    // ensure we correctly pass that TLS part of the data to rustls so that is can handle the TLS
+    // handshake properly.
     use std::{marker::PhantomData, sync::Arc};
 
     struct MyShim<RW> {
