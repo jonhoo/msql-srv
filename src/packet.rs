@@ -77,9 +77,11 @@ impl<W: Read + Write> PacketConn<W> {
 
     #[cfg(feature = "tls")]
     pub fn switch_to_tls(&mut self, config: std::sync::Arc<ServerConfig>) -> io::Result<()> {
-        assert_eq!(self.remaining, 0); // otherwise we've read ahead into the TLS handshake and will be in trouble.
-
-        self.rw.switch_to_tls(config)
+        let res = self
+            .rw
+            .switch_to_tls(config, &self.bytes[self.bytes.len() - self.remaining..]);
+        self.remaining = 0;
+        res
     }
 
     #[cfg(feature = "tls")]
@@ -103,15 +105,7 @@ impl<R: Read + Write> PacketConn<R> {
 
         loop {
             if self.remaining != 0 {
-                let bytes = {
-                    // NOTE: this is all sorts of unfortunate. what we really want to do is to give
-                    // &self.bytes[self.start..] to `packet()`, and the lifetimes should all work
-                    // out. however, without NLL, borrowck doesn't realize that self.bytes is no
-                    // longer borrowed after the match, and so can be mutated.
-                    let bytes = &self.bytes[self.start..];
-                    unsafe { ::std::slice::from_raw_parts(bytes.as_ptr(), bytes.len()) }
-                };
-                match packet(bytes) {
+                match packet(&self.bytes[self.start..]) {
                     Ok((rest, p)) => {
                         self.remaining = rest.len();
                         return Ok(Some(p));

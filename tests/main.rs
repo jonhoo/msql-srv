@@ -9,9 +9,10 @@ use msql_srv::{
     Column, ErrorKind, InitWriter, MysqlIntermediary, MysqlShim, ParamParser, QueryResultWriter,
     StatementMetaWriter,
 };
+use mysql::prelude::*;
+use mysql::MySqlError;
 use mysql::OptsBuilder;
 use mysql::SslOpts;
-use mysql::{prelude::*, MySqlError};
 #[cfg(all(feature = "tls", unix))]
 use openssl::{
     asn1::Asn1Time,
@@ -31,10 +32,13 @@ use rustls::{
 };
 use std::error::Error;
 use std::io;
+use std::io::Read;
+use std::io::Write;
 use std::net;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::thread;
+use std::time::Duration;
 
 struct TestingShim<Q, P, E, I, A> {
     columns: Vec<Column>,
@@ -145,6 +149,8 @@ where
         use std::fs::File;
         use std::io::Write;
 
+        use mysql::ClientIdentity;
+
         let mut client_cert_der = None;
 
         if use_client_certs {
@@ -195,12 +201,9 @@ where
             self.client_tls = Some(
                 SslOpts::default()
                     .with_danger_accept_invalid_certs(true)
-                    .with_pkcs12_path(
-                        self.client_cert_pkcs12_file
-                            .as_ref()
-                            .map(|x| x.path().to_owned()),
-                    )
-                    .with_password(Some("password")),
+                    .with_client_identity(self.client_cert_pkcs12_file.as_ref().map(|x| {
+                        ClientIdentity::new(x.path().to_owned()).with_password("password")
+                    })),
             );
         }
 
@@ -345,6 +348,113 @@ fn it_connects_tls_both_with_client_certs() {
     let (username, certs) = tls_test_common(true, true, true).unwrap();
     assert_eq!(username, Some(b"username".to_vec()));
     assert!(!certs.expect("expected client certs").is_empty());
+}
+
+#[test]
+#[cfg(all(feature = "tls", unix))]
+fn it_connects_tls_both_with_delayed_server_read() {
+    // This test is to ensure correctly handle the case when we read both the pre-TLS data as well
+    // as (at least part of) the TLS handshake into our the buffer.  When that happens, we need to
+    // ensure we correctly pass that TLS part of the data to rustls so that is can handle the TLS
+    // handshake properly.
+    use std::{marker::PhantomData, sync::Arc};
+
+    struct MyShim<RW> {
+        ph: PhantomData<RW>,
+    }
+
+    impl<RW: Read + Write> MysqlShim<RW> for MyShim<RW> {
+        type Error = io::Error;
+
+        fn on_prepare(
+            &mut self,
+            _: &str,
+            _: StatementMetaWriter<'_, RW>,
+        ) -> Result<(), Self::Error> {
+            unreachable!()
+        }
+
+        fn on_execute(
+            &mut self,
+            _: u32,
+            _: ParamParser<'_>,
+            _: QueryResultWriter<'_, RW>,
+        ) -> Result<(), Self::Error> {
+            unreachable!()
+        }
+
+        fn on_close(&mut self, _: u32) {
+            unreachable!()
+        }
+
+        fn on_query(&mut self, _: &str, _: QueryResultWriter<'_, RW>) -> Result<(), Self::Error> {
+            unreachable!()
+        }
+
+        fn tls_config(&self) -> Option<Arc<ServerConfig>> {
+            let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+
+            Some(std::sync::Arc::new(
+                ServerConfig::builder()
+                    .with_safe_defaults()
+                    .with_no_client_auth()
+                    .with_single_cert(
+                        vec![Certificate(cert.serialize_der().unwrap())],
+                        PrivateKey(cert.get_key_pair().serialize_der()),
+                    )
+                    .unwrap(),
+            ))
+        }
+    }
+
+    let shim = MyShim {
+        ph: PhantomData::default(),
+    };
+
+    let listener = net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let jh = thread::spawn(move || {
+        let (s, _) = listener.accept().unwrap();
+        let s = DelayedReadRW {
+            s,
+            read_delay: Duration::from_millis(200),
+        };
+        MysqlIntermediary::run_on(shim, s)
+    });
+
+    let db = mysql::Conn::new(
+        OptsBuilder::default()
+            .ip_or_hostname(Some("localhost"))
+            .tcp_port(port)
+            .ssl_opts(Some(
+                SslOpts::default().with_danger_accept_invalid_certs(true),
+            )),
+    )
+    .unwrap();
+    drop(db);
+    jh.join().unwrap().unwrap();
+}
+
+struct DelayedReadRW<RW: Read + Write> {
+    s: RW,
+    read_delay: Duration,
+}
+
+impl<RW: Read + Write> Read for DelayedReadRW<RW> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        thread::sleep(self.read_delay);
+        self.s.read(buf)
+    }
+}
+
+impl<RW: Read + Write> Write for DelayedReadRW<RW> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.s.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.s.flush()
+    }
 }
 
 #[test]
@@ -688,21 +798,21 @@ fn multi_result() {
         let mut result = db
             .query_iter("SELECT a FROM foo; SELECT a FROM foo")
             .unwrap();
-        let mut set = result.next_set().unwrap().unwrap();
+        let mut set = result.iter().unwrap();
         let row1: Vec<_> = set
             .by_ref()
             .filter_map(|row| row.unwrap().get::<i16, _>(0))
             .collect();
         assert_eq!(row1, vec![1024]);
         drop(set);
-        let mut set = result.next_set().unwrap().unwrap();
+        let mut set = result.iter().unwrap();
         let row2: Vec<_> = set
             .by_ref()
             .filter_map(|row| row.unwrap().get::<i16, _>(0))
             .collect();
         assert_eq!(row2, vec![1025]);
         drop(set);
-        assert!(result.next_set().is_none());
+        assert!(result.iter().is_none());
     })
 }
 
