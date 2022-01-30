@@ -171,10 +171,10 @@ where
 
             let builder = ServerConfig::builder().with_safe_defaults();
 
-            let builder = if use_client_certs {
+            let builder = if let Some(client_cert_der) = client_cert_der {
                 let mut client_auth_roots = RootCertStore::empty();
 
-                client_auth_roots.add(&client_cert_der.unwrap()).unwrap();
+                client_auth_roots.add(&client_cert_der).unwrap();
 
                 let client_auth = AllowAnyAuthenticatedClient::new(client_auth_roots);
 
