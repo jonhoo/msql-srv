@@ -207,7 +207,7 @@ pub trait MysqlShim<W: Read + Write> {
 }
 
 /// Information about an authenticated user
-#[derive(Debug, Default, Clone, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct AuthenticationContext<'a> {
     /// The username exactly as passed by the client,
     pub username: Option<Vec<u8>>,

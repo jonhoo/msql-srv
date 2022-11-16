@@ -392,10 +392,10 @@ impl ToMysqlValue for [u8] {
 
 impl ToMysqlValue for Vec<u8> {
     fn to_mysql_text<W: Write>(&self, w: &mut W) -> io::Result<()> {
-        (&self[..]).to_mysql_text(w)
+        (self[..]).to_mysql_text(w)
     }
     fn to_mysql_bin<W: Write>(&self, w: &mut W, c: &Column) -> io::Result<()> {
-        (&self[..]).to_mysql_bin(w, c)
+        (self[..]).to_mysql_bin(w, c)
     }
 }
 
@@ -563,8 +563,10 @@ impl ToMysqlValue for myc::value::Value {
             myc::value::Value::Float(f) => f.to_mysql_text(w),
             myc::value::Value::Double(f) => f.to_mysql_text(w),
             myc::value::Value::Date(y, mo, d, h, mi, s, us) => {
-                NaiveDate::from_ymd(i32::from(y), u32::from(mo), u32::from(d))
-                    .and_hms_micro(u32::from(h), u32::from(mi), u32::from(s), us)
+                NaiveDate::from_ymd_opt(i32::from(y), u32::from(mo), u32::from(d))
+                    .unwrap_or_else(|| panic!("invalid date: y {} mo {} d {}", y, mo, d))
+                    .and_hms_micro_opt(u32::from(h), u32::from(mi), u32::from(s), us)
+                    .unwrap_or_else(|| panic!("invalid date: h {} mi {} s {} us {}", h, mi, s, us))
                     .to_mysql_text(w)
             }
             myc::value::Value::Time(neg, d, h, m, s, us) => {
@@ -628,8 +630,10 @@ impl ToMysqlValue for myc::value::Value {
             myc::value::Value::Float(f) => f.to_mysql_bin(w, c),
             myc::value::Value::Double(f) => f.to_mysql_bin(w, c),
             myc::value::Value::Date(y, mo, d, h, mi, s, us) => {
-                NaiveDate::from_ymd(i32::from(y), u32::from(mo), u32::from(d))
-                    .and_hms_micro(u32::from(h), u32::from(mi), u32::from(s), us)
+                NaiveDate::from_ymd_opt(i32::from(y), u32::from(mo), u32::from(d))
+                    .unwrap_or_else(|| panic!("invalid date: y {} mo {} d {}", y, mo, d))
+                    .and_hms_micro_opt(u32::from(h), u32::from(mi), u32::from(s), us)
+                    .unwrap_or_else(|| panic!("invalid date: h {} mi {} s {} us {}", h, mi, s, us))
                     .to_mysql_bin(w, c)
             }
             myc::value::Value::Time(neg, d, h, m, s, us) => {

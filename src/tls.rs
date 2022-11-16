@@ -17,7 +17,7 @@ pub(crate) struct SwitchableConn<T: Read + Write>(pub(crate) Option<EitherConn<T
 
 pub(crate) enum EitherConn<T: Read + Write> {
     Plain(T),
-    Tls(rustls::StreamOwned<ServerConnection, PrependedReader<T>>),
+    Tls(Box<rustls::StreamOwned<ServerConnection, PrependedReader<T>>>),
 }
 
 impl<T: Read + Write> Read for SwitchableConn<T> {
@@ -56,10 +56,10 @@ impl<T: Read + Write> SwitchableConn<T> {
         to_prepend: &[u8],
     ) -> io::Result<()> {
         let replacement = match self.0.take() {
-            Some(EitherConn::Plain(plain)) => Ok(EitherConn::Tls(create_stream(
+            Some(EitherConn::Plain(plain)) => Ok(EitherConn::Tls(Box::new(create_stream(
                 PrependedReader::new(to_prepend, plain),
                 config,
-            )?)),
+            )?))),
             Some(EitherConn::Tls(_)) => Err(io::Error::new(
                 io::ErrorKind::Other,
                 "tls variant found when plain was expected",

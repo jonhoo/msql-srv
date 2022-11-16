@@ -206,14 +206,15 @@ impl<'a> From<Value<'a>> for NaiveDate {
     fn from(val: Value<'a>) -> Self {
         if let ValueInner::Date(mut v) = val.0 {
             assert_eq!(v.len(), 4);
-            NaiveDate::from_ymd(
+            if let Some(d) = NaiveDate::from_ymd_opt(
                 i32::from(v.read_u16::<LittleEndian>().unwrap()),
                 u32::from(v.read_u8().unwrap()),
                 u32::from(v.read_u8().unwrap()),
-            )
-        } else {
-            panic!("invalid type conversion from {:?} to date", val)
+            ) {
+                return d;
+            }
         }
+        panic!("invalid type conversion from {:?} to date", val)
     }
 }
 
@@ -221,25 +222,28 @@ impl<'a> From<Value<'a>> for NaiveDateTime {
     fn from(val: Value<'a>) -> Self {
         if let ValueInner::Datetime(mut v) = val.0 {
             assert!(v.len() == 7 || v.len() == 11);
-            let d = NaiveDate::from_ymd(
+            if let Some(d) = NaiveDate::from_ymd_opt(
                 i32::from(v.read_u16::<LittleEndian>().unwrap()),
                 u32::from(v.read_u8().unwrap()),
                 u32::from(v.read_u8().unwrap()),
-            );
+            ) {
+                let h = u32::from(v.read_u8().unwrap());
+                let m = u32::from(v.read_u8().unwrap());
+                let s = u32::from(v.read_u8().unwrap());
 
-            let h = u32::from(v.read_u8().unwrap());
-            let m = u32::from(v.read_u8().unwrap());
-            let s = u32::from(v.read_u8().unwrap());
+                let d = if v.len() == 11 {
+                    let us = v.read_u32::<LittleEndian>().unwrap();
+                    d.and_hms_micro_opt(h, m, s, us)
+                } else {
+                    d.and_hms_opt(h, m, s)
+                };
 
-            if v.len() == 11 {
-                let us = v.read_u32::<LittleEndian>().unwrap();
-                d.and_hms_micro(h, m, s, us)
-            } else {
-                d.and_hms(h, m, s)
+                if let Some(d) = d {
+                    return d;
+                }
             }
-        } else {
-            panic!("invalid type conversion from {:?} to datetime", val)
         }
+        panic!("invalid type conversion from {:?} to datetime", val)
     }
 }
 
@@ -438,13 +442,16 @@ mod tests {
     rt!(
         time,
         chrono::NaiveDate,
-        chrono::Local::today().naive_local(),
+        chrono::Local::now().date_naive(),
         ColumnType::MYSQL_TYPE_DATE
     );
     rt!(
         datetime,
         chrono::NaiveDateTime,
-        chrono::Utc.ymd(1989, 12, 7).and_hms(8, 0, 4).naive_utc(),
+        chrono::Utc
+            .with_ymd_and_hms(1989, 12, 7, 8, 0, 4)
+            .unwrap()
+            .naive_utc(),
         ColumnType::MYSQL_TYPE_DATETIME
     );
     rt!(
