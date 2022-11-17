@@ -73,11 +73,10 @@ impl<'a> Iterator for Params<'a> {
                 self.bound_types.clear();
                 for i in 0..self.params as usize {
                     self.bound_types.push((
-                        myc::constants::ColumnType::try_from(typmap[2 * i as usize])
-                            .unwrap_or_else(|e| {
-                                panic!("bad column type 0x{:x}: {}", typmap[2 * i as usize], e)
-                            }),
-                        (typmap[2 * i as usize + 1] & 128) != 0,
+                        myc::constants::ColumnType::try_from(typmap[2 * i]).unwrap_or_else(|e| {
+                            panic!("bad column type 0x{:x}: {}", typmap[2 * i], e)
+                        }),
+                        (typmap[2 * i + 1] & 128) != 0,
                     ));
                 }
                 self.input = rest;
