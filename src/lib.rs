@@ -207,7 +207,8 @@ pub trait MysqlShim<W: Read + Write> {
 }
 
 /// Information about an authenticated user
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct AuthenticationContext<'a> {
     /// The username exactly as passed by the client,
     pub username: Option<Vec<u8>>,

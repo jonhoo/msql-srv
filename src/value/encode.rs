@@ -2,7 +2,7 @@ use crate::myc::constants::{ColumnFlags, ColumnType};
 use crate::myc::io::WriteMysqlExt;
 use crate::Column;
 use byteorder::{LittleEndian, WriteBytesExt};
-use std::io::{self, Write};
+use std::io::{self, ErrorKind::Other, Write};
 
 /// Implementors of this trait can be sent as a single resultset value to a MySQL/MariaDB client.
 pub trait ToMysqlValue {
@@ -564,17 +564,21 @@ impl ToMysqlValue for myc::value::Value {
             myc::value::Value::Double(f) => f.to_mysql_text(w),
             myc::value::Value::Date(y, mo, d, h, mi, s, us) => {
                 NaiveDate::from_ymd_opt(i32::from(y), u32::from(mo), u32::from(d))
-                    .unwrap_or_else(|| panic!("invalid date: y {} mo {} d {}", y, mo, d))
+                    .ok_or_else(|| {
+                        io::Error::new(Other, format!("invalid date: y {} mo {} d {}", y, mo, d))
+                    })?
                     .and_hms_micro_opt(u32::from(h), u32::from(mi), u32::from(s), us)
-                    .unwrap_or_else(|| panic!("invalid date: h {} mi {} s {} us {}", h, mi, s, us))
+                    .ok_or_else(|| {
+                        io::Error::new(
+                            Other,
+                            format!("invalid date: h {} mi {} s {} us {}", h, mi, s, us),
+                        )
+                    })?
                     .to_mysql_text(w)
             }
             myc::value::Value::Time(neg, d, h, m, s, us) => {
                 if neg {
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        "negative times not yet supported",
-                    ));
+                    return Err(io::Error::new(Other, "negative times not yet supported"));
                 }
                 (chrono::Duration::days(i64::from(d))
                     + chrono::Duration::hours(i64::from(h))
@@ -631,17 +635,21 @@ impl ToMysqlValue for myc::value::Value {
             myc::value::Value::Double(f) => f.to_mysql_bin(w, c),
             myc::value::Value::Date(y, mo, d, h, mi, s, us) => {
                 NaiveDate::from_ymd_opt(i32::from(y), u32::from(mo), u32::from(d))
-                    .unwrap_or_else(|| panic!("invalid date: y {} mo {} d {}", y, mo, d))
+                    .ok_or_else(|| {
+                        io::Error::new(Other, format!("invalid date: y {} mo {} d {}", y, mo, d))
+                    })?
                     .and_hms_micro_opt(u32::from(h), u32::from(mi), u32::from(s), us)
-                    .unwrap_or_else(|| panic!("invalid date: h {} mi {} s {} us {}", h, mi, s, us))
+                    .ok_or_else(|| {
+                        io::Error::new(
+                            Other,
+                            format!("invalid date: h {} mi {} s {} us {}", h, mi, s, us),
+                        )
+                    })?
                     .to_mysql_bin(w, c)
             }
             myc::value::Value::Time(neg, d, h, m, s, us) => {
                 if neg {
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        "negative times not yet supported",
-                    ));
+                    return Err(io::Error::new(Other, "negative times not yet supported"));
                 }
                 (chrono::Duration::days(i64::from(d))
                     + chrono::Duration::hours(i64::from(h))
