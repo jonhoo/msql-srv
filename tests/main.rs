@@ -147,7 +147,6 @@ where
     #[cfg(all(feature = "tls", unix))]
     fn with_tls(mut self, client: bool, server: bool, use_client_certs: bool) -> Self {
         use std::fs::File;
-        use std::io::Write;
 
         use mysql::ClientIdentity;
 
@@ -998,7 +997,10 @@ fn insert_exec() {
             );
             assert_eq!(
                 Into::<chrono::NaiveDateTime>::into(params[3].value),
-                chrono::NaiveDate::from_ymd(2018, 4, 6).and_hms(13, 0, 56)
+                chrono::NaiveDate::from_ymd_opt(2018, 4, 6)
+                    .unwrap()
+                    .and_hms_opt(13, 0, 56)
+                    .unwrap()
             );
             assert_eq!(Into::<&str>::into(params[4].value), "token199");
             assert_eq!(Into::<&str>::into(params[5].value), "rsstoken199");
