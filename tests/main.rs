@@ -183,7 +183,7 @@ where
 
                 let client_auth = AllowAnyAuthenticatedClient::new(client_auth_roots);
 
-                builder.with_client_cert_verifier(client_auth)
+                builder.with_client_cert_verifier(Arc::new(client_auth))
             } else {
                 builder.with_no_client_auth()
             }
