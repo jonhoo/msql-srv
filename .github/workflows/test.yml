@@ -54,6 +54,13 @@ jobs:
           command: update
           toolchain: nightly
           args: -Zminimal-versions
+      # to mitigate the ="0" declaration in rust_mysql_common:
+      # https://github.com/blackbeam/rust_mysql_common/blob/1a493156bad0a4f40e0f3c4db9bbc40e498db726/Cargo.toml#L79
+      - name: cargo update -p bindgen
+        uses: actions-rs/cargo@v1
+        with:
+          command: update
+          args: -p bindgen@0.55.0
       - name: cargo test
         uses: actions-rs/cargo@v1
         with:

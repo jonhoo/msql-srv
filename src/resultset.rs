@@ -266,16 +266,12 @@ where
                 self.data.resize(self.bitmap_len, 0);
             }
 
-            let c = self
-                .columns
-                .get(self.col)
-                .ok_or_else(|| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "row has more columns than specification",
-                    )
-                })?
-                .borrow();
+            let c = self.columns.get(self.col).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "row has more columns than specification",
+                )
+            })?;
             if v.is_null() {
                 if c.colflags.contains(ColumnFlags::NOT_NULL_FLAG) {
                     return Err(io::Error::new(

@@ -28,7 +28,8 @@ use openssl::{
 use rcgen::generate_simple_self_signed;
 #[cfg(all(feature = "tls", unix))]
 use rustls::{
-    server::AllowAnyAuthenticatedClient, Certificate, PrivateKey, RootCertStore, ServerConfig,
+    pki_types::{CertificateDer, PrivateKeyDer},
+    RootCertStore, ServerConfig,
 };
 use std::error::Error;
 use std::io;
@@ -149,20 +150,24 @@ where
         use std::fs::File;
 
         use mysql::ClientIdentity;
+        use rustls::server::WebPkiClientVerifier;
 
         let mut client_cert_der = None;
 
         if use_client_certs {
             let (client_cert, client_pkey) = mk_client_cert().unwrap();
 
-            client_cert_der = Some(Certificate(client_cert.to_der().unwrap()));
+            client_cert_der = Some(CertificateDer::from(client_cert.to_der().unwrap()));
 
             // Set up client cert der12 file.
             let client_cert_pkcs12_file = Arc::new(tempfile::NamedTempFile::new().unwrap());
             self.client_cert_pkcs12_file = Some(Arc::clone(&client_cert_pkcs12_file));
 
             let pkcs12 = Pkcs12::builder()
-                .build("password", "friendly_name", &client_pkey, &client_cert)
+                .name("friendly_name")
+                .cert(&client_cert)
+                .pkey(&client_pkey)
+                .build2("password")
                 .unwrap();
             let der = pkcs12.to_der().unwrap();
 
@@ -174,22 +179,24 @@ where
         if server {
             let cert = generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
 
-            let builder = ServerConfig::builder().with_safe_defaults();
+            let builder = ServerConfig::builder();
 
             let builder = if let Some(client_cert_der) = client_cert_der {
                 let mut client_auth_roots = RootCertStore::empty();
 
-                client_auth_roots.add(&client_cert_der).unwrap();
+                client_auth_roots.add(client_cert_der).unwrap();
 
-                let client_auth = AllowAnyAuthenticatedClient::new(client_auth_roots);
+                let client_auth = WebPkiClientVerifier::builder(client_auth_roots.into())
+                    .build()
+                    .unwrap();
 
                 builder.with_client_cert_verifier(client_auth)
             } else {
                 builder.with_no_client_auth()
             }
             .with_single_cert(
-                vec![Certificate(cert.serialize_der().unwrap())],
-                PrivateKey(cert.get_key_pair().serialize_der()),
+                vec![CertificateDer::from(cert.serialize_der().unwrap())],
+                PrivateKeyDer::Pkcs8(cert.get_key_pair().serialize_der().into()),
             )
             .unwrap();
 
@@ -301,7 +308,7 @@ fn tls_test_common(
     enable_client_tls: bool,
     enable_server_tls: bool,
     use_client_certs: bool,
-) -> Result<(Option<Vec<u8>>, Option<Vec<Certificate>>), Box<dyn Error + 'static>> {
+) -> Result<(Option<Vec<u8>>, Option<Vec<CertificateDer<'static>>>), Box<dyn Error + 'static>> {
     let auth_context = Arc::new(Mutex::new((None, None)));
     let auth_context1 = Arc::clone(&auth_context);
     TestingShim::new(
@@ -312,7 +319,11 @@ fn tls_test_common(
         move |a| {
             let mut ac = auth_context1.lock().unwrap();
             assert_eq!(*ac, (None, None));
-            *ac = (a.username.clone(), a.tls_client_certs.map(|x| x.to_vec()));
+            *ac = (
+                a.username.clone(),
+                a.tls_client_certs
+                    .map(|x| x.iter().map(|c| c.clone().into_owned()).collect()),
+            );
             Ok(())
         },
     )
@@ -395,11 +406,10 @@ fn it_connects_tls_both_with_delayed_server_read() {
 
             Some(std::sync::Arc::new(
                 ServerConfig::builder()
-                    .with_safe_defaults()
                     .with_no_client_auth()
                     .with_single_cert(
-                        vec![Certificate(cert.serialize_der().unwrap())],
-                        PrivateKey(cert.get_key_pair().serialize_der()),
+                        vec![CertificateDer::from(cert.serialize_der().unwrap())],
+                        PrivateKeyDer::Pkcs8(cert.get_key_pair().serialize_der().into()),
                     )
                     .unwrap(),
             ))
