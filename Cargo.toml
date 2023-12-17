@@ -2,7 +2,7 @@
 name = "msql-srv"
 version = "0.10.0"
 edition = "2018"
-rust-version = "1.64.0"
+rust-version = "1.66.0"
 
 description = "Bindings for emulating a MySQL/MariaDB server"
 readme = "README.md"
