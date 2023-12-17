@@ -40,7 +40,7 @@ tempfile = "3.3.0"
 native-tls = "0.2.8"
 
 [target.'cfg(unix)'.dev-dependencies]
-openssl = "0.10.55"
+openssl = "0.10.60"
 
 # for minimal-versions
 [target.'cfg(any())'.dev-dependencies]
