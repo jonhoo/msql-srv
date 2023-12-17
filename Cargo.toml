@@ -1,7 +1,7 @@
 [package]
 name = "msql-srv"
 version = "0.10.0"
-edition = "2018"
+edition = "2021"
 rust-version = "1.66.0"
 
 description = "Bindings for emulating a MySQL/MariaDB server"
