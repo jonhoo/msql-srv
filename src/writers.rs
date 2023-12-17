@@ -41,8 +41,6 @@ pub fn write_err<W: Read + Write>(
     w.end_packet()
 }
 
-use std::borrow::Borrow;
-
 pub(crate) fn write_prepare_ok<'a, PI, CI, W: Read + Write>(
     id: u32,
     params: PI,
@@ -84,7 +82,6 @@ where
 {
     let mut empty = true;
     for c in i {
-        let c = c.borrow();
         use crate::myc::constants::UTF8_GENERAL_CI;
         w.write_lenenc_str(b"def")?;
         w.write_lenenc_str(b"")?;

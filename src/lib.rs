@@ -214,7 +214,7 @@ pub struct AuthenticationContext<'a> {
     pub username: Option<Vec<u8>>,
     #[cfg(feature = "tls")]
     /// The TLS certificate chain presented by the client.
-    pub tls_client_certs: Option<&'a [rustls::Certificate]>,
+    pub tls_client_certs: Option<&'a [rustls::pki_types::CertificateDer<'a>]>,
     #[cfg(not(feature = "tls"))]
     _pd: Option<&'a std::marker::PhantomData<()>>,
 }
