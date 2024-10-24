@@ -530,17 +530,15 @@ impl<B: MysqlShim<RW>, RW: Read + Write> MysqlIntermediary<B, RW> {
                     return Err(e);
                 }
             }
-            #[cfg(not(feature = "tls"))]
-            {
-                if let Err(e) = self.shim.after_authentication(&auth_context) {
-                    writers::write_err(
-                        ErrorKind::ER_ACCESS_DENIED_ERROR,
-                        "client authentication failed".as_ref(),
-                        &mut self.rw,
-                    )?;
-                    self.rw.flush()?;
-                    return Err(e);
-                }
+
+            if let Err(e) = self.shim.after_authentication(&auth_context) {
+                writers::write_err(
+                    ErrorKind::ER_ACCESS_DENIED_ERROR,
+                    "client authentication failed".as_ref(),
+                    &mut self.rw,
+                )?;
+                self.rw.flush()?;
+                return Err(e);
             }
         }
 
