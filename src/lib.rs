@@ -335,13 +335,17 @@ impl<B: MysqlShim<RW>, RW: Read + Write> MysqlIntermediary<B, RW> {
         let tls_conf = self.shim.tls_config();
 
         let mut capabilities = CapabilityFlags::empty();
-        #[cfg(feature = "tls")]
-        capabilities.insert(CapabilityFlags::CLIENT_SSL);
         capabilities.insert(CapabilityFlags::CLIENT_PROTOCOL_41);
-        capabilities.insert(CapabilityFlags::CLIENT_SECURE_CONNECTION);
+        #[cfg(feature = "tls")]
+        {
+            if tls_conf.is_some() {
+                capabilities.insert(CapabilityFlags::CLIENT_SSL);
+                capabilities.insert(CapabilityFlags::CLIENT_SECURE_CONNECTION);
 
-        capabilities.insert(CapabilityFlags::CLIENT_PLUGIN_AUTH);
-        capabilities.insert(CapabilityFlags::CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA);
+                capabilities.insert(CapabilityFlags::CLIENT_PLUGIN_AUTH);
+                capabilities.insert(CapabilityFlags::CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA);
+            }
+        }
 
         let server_capabilities = capabilities.bits().to_le_bytes();
 
@@ -431,7 +435,6 @@ impl<B: MysqlShim<RW>, RW: Read + Write> MysqlIntermediary<B, RW> {
                         "client requested SSL despite us not advertising support for it",
                     )
                 })?;
-
                 self.rw.switch_to_tls(config)?;
 
                 let (seq, handshake) = self.rw.next()?.ok_or_else(|| {
