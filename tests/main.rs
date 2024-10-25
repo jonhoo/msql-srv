@@ -412,6 +412,15 @@ fn it_connects_tls_both_with_client_certs() {
 
 #[test]
 #[cfg(all(feature = "tls", unix))]
+fn it_connects_client_plugin_auth_and_tls() {
+    // SSL connection when ssl enabled on server and used by client, with the client passing a mysql_native_password to the server.
+    let (username, _, auth) = tls_test_common_plugin(true, true, false, true).unwrap();
+    assert_eq!(username, Some(b"username".to_vec()));
+    assert!(auth.is_some());
+}
+
+#[test]
+#[cfg(all(feature = "tls", unix))]
 fn it_connects_tls_both_with_delayed_server_read() {
     // This test is to ensure correctly handle the case when we read both the pre-TLS data as well
     // as (at least part of) the TLS handshake into our the buffer.  When that happens, we need to
