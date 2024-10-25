@@ -259,7 +259,6 @@ where
             .tcp_port(port)
             .ssl_opts(client_tls)
             .pass(pwd);
-        dbg!(&opts);
         let mut db = mysql::Conn::new(opts)?;
 
         c(&mut db);
@@ -361,7 +360,6 @@ fn tls_test_common_plugin(
         move |a| {
             let mut ac = auth_context1.lock().unwrap();
             assert_eq!(*ac, (None, None, None));
-            dbg!(&a);
 
             *ac = (
                 a.username.clone(),
