@@ -529,6 +529,9 @@ impl<B: MysqlShim<RW>, RW: Read + Write> MysqlIntermediary<B, RW> {
                     self.rw.flush()?;
                     return Err(e);
                 }
+                writers::write_ok_packet(&mut self.rw, 0, 0, StatusFlags::empty())?;
+                self.rw.flush()?;
+                return Ok(());
             }
 
             if let Err(e) = self.shim.after_authentication(&auth_context) {
