@@ -265,11 +265,27 @@ pub struct AuthenticationContext<'a> {
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct PluginAuth<'a> {
     /// Name of the plugin used to create this data.
-    pub plugin_name: &'a [u8],
+    pub plugin_name: Cow<'a, [u8]>,
     /// The salt used by the client to hash the password.
     pub salt: [u8; SALT_SIZE],
     /// The authentication data. In most cases this is the password with a hashing algorithm applied.
     pub auth_data: Cow<'a, [u8]>,
+}
+
+impl<'a> PluginAuth<'a> {
+    /// Convenience function to clone the data to owned values
+    pub fn to_owned(&self) -> PluginAuth<'static> {
+        let Self {
+            plugin_name,
+            salt,
+            auth_data,
+        } = self;
+        PluginAuth {
+            plugin_name: Cow::Owned(plugin_name.to_vec()),
+            salt: *salt,
+            auth_data: Cow::Owned(auth_data.to_vec()),
+        }
+    }
 }
 
 /// A server that speaks the MySQL/MariaDB protocol, and can delegate client commands to a backend
@@ -560,12 +576,12 @@ impl<B: MysqlShim<RW>, RW: Read + Write> MysqlIntermediary<B, RW> {
     ) -> Result<Option<PluginAuth<'a>>, B::Error> {
         let plugin_auth = match (auth_switch_response, auth_response, received_client_plugin) {
             (None, Some(auth_data), Some(auth_plugin)) => Some(PluginAuth {
-                plugin_name: auth_plugin,
+                plugin_name: auth_plugin.into(),
                 salt,
                 auth_data: auth_data.into(),
             }),
             (Some(switch_data), _, Some(auth_plugin)) => Some(PluginAuth {
-                plugin_name: auth_plugin,
+                plugin_name: auth_plugin.into(),
                 salt,
                 auth_data: switch_data.into(),
             }),

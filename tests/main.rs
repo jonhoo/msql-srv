@@ -5,6 +5,7 @@ extern crate mysql_common as myc;
 extern crate nom;
 
 use msql_srv::AuthenticationContext;
+use msql_srv::PluginAuth;
 use msql_srv::{
     Column, ErrorKind, InitWriter, MysqlIntermediary, MysqlShim, ParamParser, QueryResultWriter,
     StatementMetaWriter,
@@ -54,6 +55,8 @@ struct TestingShim<Q, P, E, I, A> {
     client_tls: Option<SslOpts>,
     #[cfg(all(feature = "tls", unix))]
     client_cert_pkcs12_file: Option<Arc<tempfile::NamedTempFile>>,
+    #[cfg(feature = "tls")]
+    password: Option<&'static str>,
 }
 
 impl<Q, P, E, I, A> MysqlShim<net::TcpStream> for TestingShim<Q, P, E, I, A>
@@ -132,6 +135,8 @@ where
             client_tls: None,
             #[cfg(all(feature = "tls", unix))]
             client_cert_pkcs12_file: None,
+            #[cfg(feature = "tls")]
+            password: None,
         }
     }
 
@@ -146,7 +151,13 @@ where
     }
 
     #[cfg(all(feature = "tls", unix))]
-    fn with_tls(mut self, client: bool, server: bool, use_client_certs: bool) -> Self {
+    fn with_tls_plugin(
+        mut self,
+        client: bool,
+        server: bool,
+        use_client_certs: bool,
+        use_client_plugin: bool,
+    ) -> Self {
         use std::fs::File;
 
         use mysql::ClientIdentity;
@@ -172,7 +183,7 @@ where
             let der = pkcs12.to_der().unwrap();
 
             let mut f = File::create(&*client_cert_pkcs12_file).unwrap();
-            f.write(&der).unwrap();
+            let _written = f.write(&der).unwrap();
             f.flush().unwrap();
         }
 
@@ -203,7 +214,7 @@ where
             self.server_tls = Some(std::sync::Arc::new(builder));
         }
 
-        if client {
+        if client && !use_client_plugin {
             self.client_tls = Some(
                 SslOpts::default()
                     .with_danger_accept_invalid_certs(true)
@@ -211,6 +222,11 @@ where
                         ClientIdentity::new(x.path().to_owned()).with_password("password")
                     })),
             );
+        }
+
+        if client && use_client_plugin {
+            self.client_tls = Some(SslOpts::default().with_danger_accept_invalid_certs(true));
+            self.password = Some("testing password");
         }
 
         self
@@ -228,6 +244,7 @@ where
         C: FnOnce(&mut mysql::Conn) -> (),
     {
         let client_tls = self.client_tls.clone();
+        let pwd = self.password;
 
         let listener = net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -240,8 +257,9 @@ where
             .ip_or_hostname(Some("localhost"))
             .user(Some("username"))
             .tcp_port(port)
-            .ssl_opts(client_tls);
-
+            .ssl_opts(client_tls)
+            .pass(pwd);
+        dbg!(&opts);
         let mut db = mysql::Conn::new(opts)?;
 
         c(&mut db);
@@ -309,8 +327,32 @@ fn tls_test_common(
     enable_server_tls: bool,
     use_client_certs: bool,
 ) -> Result<(Option<Vec<u8>>, Option<Vec<CertificateDer<'static>>>), Box<dyn Error + 'static>> {
-    let auth_context = Arc::new(Mutex::new((None, None)));
+    let (user, certs, _) = tls_test_common_plugin(
+        enable_client_tls,
+        enable_server_tls,
+        use_client_certs,
+        false,
+    )?;
+    Ok((user, certs))
+}
+
+#[cfg(all(feature = "tls", unix))]
+fn tls_test_common_plugin(
+    enable_client_tls: bool,
+    enable_server_tls: bool,
+    use_client_certs: bool,
+    use_client_plugin_auth: bool,
+) -> Result<
+    (
+        Option<Vec<u8>>,
+        Option<Vec<CertificateDer<'static>>>,
+        Option<PluginAuth<'static>>,
+    ),
+    Box<dyn Error + 'static>,
+> {
+    let auth_context = Arc::new(Mutex::new((None, None, None)));
     let auth_context1 = Arc::clone(&auth_context);
+
     TestingShim::new(
         |_, _| unreachable!(),
         |_| unreachable!(),
@@ -318,16 +360,24 @@ fn tls_test_common(
         |_, _| unreachable!(),
         move |a| {
             let mut ac = auth_context1.lock().unwrap();
-            assert_eq!(*ac, (None, None));
+            assert_eq!(*ac, (None, None, None));
+            dbg!(&a);
+
             *ac = (
                 a.username.clone(),
                 a.tls_client_certs
                     .map(|x| x.iter().map(|c| c.clone().into_owned()).collect()),
+                a.plugin_auth.as_ref().map(|x| x.to_owned()),
             );
             Ok(())
         },
     )
-    .with_tls(enable_client_tls, enable_server_tls, use_client_certs)
+    .with_tls_plugin(
+        enable_client_tls,
+        enable_server_tls,
+        use_client_certs,
+        use_client_plugin_auth,
+    )
     .test_with_result(|_| {})?;
 
     Ok(Arc::try_unwrap(auth_context).unwrap().into_inner().unwrap())
