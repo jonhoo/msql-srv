@@ -1,3 +1,4 @@
+#[cfg(feature = "tls")]
 extern crate chrono;
 extern crate msql_srv;
 extern crate mysql;
@@ -57,6 +58,7 @@ impl<W: std::io::Write + std::io::Read> MysqlShim<W> for ProxyServerSession {
         results.start(&[])?.finish()
     }
 
+    #[cfg(feature = "tls")]
     fn after_authentication(
         &mut self,
         context: &AuthenticationContext<'_>,
@@ -80,6 +82,7 @@ impl<W: std::io::Write + std::io::Read> MysqlShim<W> for ProxyServerSession {
         Ok(())
     }
 
+    #[cfg(feature = "tls")]
     fn tls_config(&self) -> Option<Arc<rustls::ServerConfig>> {
         let cert = generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
 
