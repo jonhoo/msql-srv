@@ -96,12 +96,14 @@
 
 extern crate mysql_common as myc;
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io;
 use std::io::prelude::*;
 use std::iter;
 use std::net;
 
+use commands::ClientHandshake;
 use myc::constants::CapabilityFlags;
 
 pub use crate::myc::constants::{ColumnFlags, ColumnType, StatusFlags};
@@ -141,12 +143,24 @@ pub use crate::params::{ParamParser, ParamValue, Params};
 pub use crate::resultset::{InitWriter, QueryResultWriter, RowWriter, StatementMetaWriter};
 pub use crate::value::{ToMysqlValue, Value, ValueInner};
 
+/// Salt length, we set the salt as fixed 20 bytes.
+pub const SALT_SIZE: usize = 20;
+
+const AUTH_PLUGIN_DATA_PART_1_LENGTH: usize = 8;
+const DEFAULT_PLUGIN_AUTH: &str = "mysql_native_password";
+
 /// Implementors of this trait can be used to drive a MySQL-compatible database backend.
 pub trait MysqlShim<W: Read + Write> {
     /// The error type produced by operations on this shim.
     ///
     /// Must implement `From<io::Error>` so that transport-level errors can be lifted.
     type Error: From<io::Error>;
+
+    /// Server version, defaults to `5.1.10-alpha-msql-proxy`
+    fn version(&self) -> &str {
+        // 5.1.10 because that's what Ruby's ActiveRecord requires
+        "5.1.10-alpha-msql-proxy"
+    }
 
     /// Called when the client issues a request to prepare `query` for later execution.
     ///
@@ -204,6 +218,33 @@ pub trait MysqlShim<W: Read + Write> {
     ) -> Result<(), Self::Error> {
         Ok(())
     }
+
+    /// Sent to the client to be included in the password hashing algorithm on the client.
+    /// This is from: https://github.com/mysql/mysql-server/blob/8.0/mysys/crypt_genhash_impl.cc#L425-L436
+    fn salt(&self) -> [u8; SALT_SIZE] {
+        // Provide a fixed salt for now (avoid introducing a dependency on rand)
+        let bs = ";X,po_k}>o6^Wz!/kM}N".as_bytes();
+        let mut salt: [u8; SALT_SIZE] = [0; SALT_SIZE];
+        for i in 0..SALT_SIZE {
+            salt[i] = bs[i];
+            if salt[i] == b'\0' || salt[i] == b'$' {
+                salt[i] += 1;
+            }
+        }
+        salt
+    }
+
+    /// Default plugin for authentication
+    /// Plugin methods: https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_connection_phase_authentication_methods.html
+    fn default_auth_plugin(&self) -> &str {
+        DEFAULT_PLUGIN_AUTH
+    }
+
+    /// Called when reading the handshake response by client's auth_plugin
+    /// See: https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_connection_phase.html#sect_protocol_connection_phase_auth_method_mismatch
+    fn auth_plugin_for_user(&self, _user: &[u8]) -> &str {
+        DEFAULT_PLUGIN_AUTH
+    }
 }
 
 /// Information about an authenticated user
@@ -215,8 +256,36 @@ pub struct AuthenticationContext<'a> {
     #[cfg(feature = "tls")]
     /// The TLS certificate chain presented by the client.
     pub tls_client_certs: Option<&'a [rustls::pki_types::CertificateDer<'a>]>,
-    #[cfg(not(feature = "tls"))]
-    _pd: Option<&'a std::marker::PhantomData<()>>,
+    /// Data collected from CLIENT_PLUGIN_AUTH
+    pub plugin_auth: Option<PluginAuth<'a>>,
+}
+
+/// Contains authentication information sent from the client based on the authentication plugin
+/// See: https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_connection_phase.html#sect_protocol_connection_phase_initial_handshake_auth_method
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct PluginAuth<'a> {
+    /// Name of the plugin used to create this data.
+    pub plugin_name: Cow<'a, [u8]>,
+    /// The salt used by the client to hash the password.
+    pub salt: [u8; SALT_SIZE],
+    /// The authentication data. In most cases this is the password with a hashing algorithm applied.
+    pub auth_data: Cow<'a, [u8]>,
+}
+
+impl<'a> PluginAuth<'a> {
+    /// Convenience function to clone the data to owned values
+    pub fn to_owned(&self) -> PluginAuth<'static> {
+        let Self {
+            plugin_name,
+            salt,
+            auth_data,
+        } = self;
+        PluginAuth {
+            plugin_name: Cow::Owned(plugin_name.to_vec()),
+            salt: *salt,
+            auth_data: Cow::Owned(auth_data.to_vec()),
+        }
+    }
 }
 
 /// A server that speaks the MySQL/MariaDB protocol, and can delegate client commands to a backend
@@ -265,26 +334,46 @@ impl<B: MysqlShim<RW>, RW: Read + Write> MysqlIntermediary<B, RW> {
         #[cfg(feature = "tls")]
         let tls_conf = self.shim.tls_config();
 
+        let mut capabilities = CapabilityFlags::empty();
+        capabilities.insert(CapabilityFlags::CLIENT_PROTOCOL_41);
+        #[cfg(feature = "tls")]
+        {
+            if tls_conf.is_some() {
+                capabilities.insert(CapabilityFlags::CLIENT_SSL);
+                capabilities.insert(CapabilityFlags::CLIENT_SECURE_CONNECTION);
+
+                capabilities.insert(CapabilityFlags::CLIENT_PLUGIN_AUTH);
+                capabilities.insert(CapabilityFlags::CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA);
+            }
+        }
+
+        let server_capabilities = capabilities.bits().to_le_bytes();
+
+        let salt = self.shim.salt();
+        let default_auth_plugin = self.shim.default_auth_plugin();
+
         self.rw.write_all(&[10])?; // protocol 10
 
-        // 5.1.10 because that's what Ruby's ActiveRecord requires
-        self.rw.write_all(&b"5.1.10-alpha-msql-proxy\0"[..])?;
+        self.rw.write_all(self.shim.version().as_bytes())?;
+        self.rw.write_all(&[0x00])?; //null terminate version
 
         self.rw.write_all(&[0x08, 0x00, 0x00, 0x00])?; // TODO: connection ID
-        self.rw.write_all(&b";X,po_k}\0"[..])?; // auth seed
-        let capabilities = &mut [0x00, 0x42]; // 4.1 proto
-        #[cfg(feature = "tls")]
-        if tls_conf.is_some() {
-            capabilities[1] |= 0x08; // SSL support flag
-        }
-        self.rw.write_all(capabilities)?;
+        self.rw
+            .write_all(&salt[0..AUTH_PLUGIN_DATA_PART_1_LENGTH])?; // auth-plugin-data-part-1, 8 bytes
+        self.rw.write_all(&[0x00])?; //fillter
+
+        self.rw.write_all(&server_capabilities[..2])?;
         self.rw.write_all(&[0x21])?; // UTF8_GENERAL_CI
         self.rw.write_all(&[0x00, 0x00])?; // status flags
-        self.rw.write_all(&[0x00, 0x00])?; // extended capabilities
-        self.rw.write_all(&[0x00])?; // no plugins
+        self.rw.write_all(&server_capabilities[2..4])?; // extended capabilities
+        self.rw.write_all(&((salt.len() + 1) as u8).to_le_bytes())?; // length of the combined auth_plugin_data(SALT)
         self.rw.write_all(&[0x00; 6][..])?; // filler
         self.rw.write_all(&[0x00; 4][..])?; // filler
-        self.rw.write_all(&b">o6^Wz!/kM}N\0"[..])?; // 4.1+ servers must extend salt
+
+        self.rw.write_all(&salt[AUTH_PLUGIN_DATA_PART_1_LENGTH..])?; // Part2 of the auth_plugin_data. 13 bytes
+        self.rw.write_all(&[0x00])?; // Null terminate salt, as 12 bytes less than 13. See: https://dev.mysql.com/doc/dev/mysql-server/latest//page_protocol_connection_phase_packets_protocol_handshake_v10.html
+        self.rw.write_all(default_auth_plugin.as_bytes())?;
+        self.rw.write_all(&[0x00])?; // Null terminate plugin string
         self.rw.flush()?;
 
         let mut auth_context = AuthenticationContext::default();
@@ -339,13 +428,13 @@ impl<B: MysqlShim<RW>, RW: Read + Write> MysqlIntermediary<B, RW> {
 
             #[cfg(feature = "tls")]
             if handshake.capabilities.contains(CapabilityFlags::CLIENT_SSL) {
+                let mut auth_context = AuthenticationContext::default();
                 let config = tls_conf.ok_or_else(|| {
                     io::Error::new(
                         io::ErrorKind::InvalidData,
                         "client requested SSL despite us not advertising support for it",
                     )
                 })?;
-
                 self.rw.switch_to_tls(config)?;
 
                 let (seq, handshake) = self.rw.next()?.ok_or_else(|| {
@@ -387,7 +476,81 @@ impl<B: MysqlShim<RW>, RW: Read + Write> MysqlIntermediary<B, RW> {
 
                 self.rw.set_seq(seq + 1);
 
-                auth_context.tls_client_certs = self.rw.tls_certs();
+                let ClientHandshake {
+                    auth_response,
+                    auth_plugin: received_client_plugin,
+                    capabilities: client_capabilities,
+                    ..
+                } = handshake;
+
+                if !client_capabilities.contains(CapabilityFlags::CLIENT_PLUGIN_AUTH) {
+                    if let Err(e) = self.shim.after_authentication(&auth_context) {
+                        writers::write_err(
+                            ErrorKind::ER_ACCESS_DENIED_ERROR,
+                            "client authentication failed".as_ref(),
+                            &mut self.rw,
+                        )?;
+                        self.rw.flush()?;
+                        return Err(e);
+                    }
+                    writers::write_ok_packet(&mut self.rw, 0, 0, StatusFlags::empty())?;
+                    self.rw.flush()?;
+                    return Ok(());
+                }
+
+                let user_auth_plugin = auth_context
+                    .username
+                    .as_ref()
+                    .map(|user| self.shim.auth_plugin_for_user(user))
+                    .unwrap_or_else(|| self.shim.default_auth_plugin());
+
+                let auth_plugin = received_client_plugin.unwrap_or(b"");
+
+                // Start SwitchAuthRequest
+                let auth_switch_response = if user_auth_plugin.as_bytes() != auth_plugin {
+                    self.rw.write_all(&[0xfe])?;
+                    self.rw.write_all(user_auth_plugin.as_bytes())?;
+                    self.rw.write_all(&[0x00])?;
+                    self.rw.write_all(&salt)?;
+                    self.rw.write_all(&[0x00])?;
+
+                    self.rw.flush()?;
+                    {
+                        let (seq, auth_response_data) = self.rw.next()?.ok_or_else(|| {
+                            io::Error::new(
+                                io::ErrorKind::ConnectionAborted,
+                                "peer terminated connection",
+                            )
+                        })?;
+                        self.rw.set_seq(seq + 1);
+
+                        Some(auth_response_data.to_vec())
+                    }
+                } else {
+                    None
+                };
+
+                auth_context.tls_client_certs = self.rw.tls_certs().map(Into::into);
+
+                let plugin_auth = self.handle_plugin_auth(
+                    auth_switch_response,
+                    auth_response,
+                    received_client_plugin,
+                    salt,
+                )?;
+                auth_context.plugin_auth = plugin_auth;
+                if let Err(e) = self.shim.after_authentication(&auth_context) {
+                    writers::write_err(
+                        ErrorKind::ER_ACCESS_DENIED_ERROR,
+                        "client authentication failed".as_ref(),
+                        &mut self.rw,
+                    )?;
+                    self.rw.flush()?;
+                    return Err(e);
+                }
+                writers::write_ok_packet(&mut self.rw, 0, 0, StatusFlags::empty())?;
+                self.rw.flush()?;
+                return Ok(());
             }
 
             if let Err(e) = self.shim.after_authentication(&auth_context) {
@@ -405,6 +568,35 @@ impl<B: MysqlShim<RW>, RW: Read + Write> MysqlIntermediary<B, RW> {
         self.rw.flush()?;
 
         Ok(())
+    }
+
+    fn handle_plugin_auth<'a>(
+        &self,
+        auth_switch_response: Option<Vec<u8>>,
+        auth_response: Option<&'a [u8]>,
+        received_client_plugin: Option<&'a [u8]>,
+        salt: [u8; SALT_SIZE],
+    ) -> Result<Option<PluginAuth<'a>>, B::Error> {
+        let plugin_auth = match (auth_switch_response, auth_response, received_client_plugin) {
+            (None, Some(auth_data), Some(auth_plugin)) => Some(PluginAuth {
+                plugin_name: auth_plugin.into(),
+                salt,
+                auth_data: auth_data.into(),
+            }),
+            (Some(switch_data), _, Some(auth_plugin)) => Some(PluginAuth {
+                plugin_name: auth_plugin.into(),
+                salt,
+                auth_data: switch_data.into(),
+            }),
+            // No auth data
+            (None, None, _) => None,
+            // Client supports plugin auth, but did not send any plugin, only auth data
+            (Some(_), _, None) => None,
+            // Client supports plugin auth, but did not send any plugin or auth data
+            (None, Some(_), None) => None,
+        };
+
+        Ok(plugin_auth)
     }
 
     fn run(mut self) -> Result<(), B::Error> {

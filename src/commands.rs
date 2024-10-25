@@ -1,4 +1,5 @@
 use crate::myc::constants::{CapabilityFlags, Command as CommandByte};
+use crate::myc::io::ReadMysqlExt;
 
 #[derive(Debug)]
 #[allow(dead_code)] // The fields here are read, but only in tests. This keeps clippy quiet.
@@ -7,6 +8,8 @@ pub struct ClientHandshake<'a> {
     maxps: u32,
     collation: u16,
     pub(crate) username: Option<&'a [u8]>,
+    pub(crate) auth_response: Option<&'a [u8]>,
+    pub(crate) auth_plugin: Option<&'a [u8]>,
 }
 
 pub fn client_handshake(i: &[u8], after_tls: bool) -> nom::IResult<&[u8], ClientHandshake<'_>> {
@@ -27,12 +30,38 @@ pub fn client_handshake(i: &[u8], after_tls: bool) -> nom::IResult<&[u8], Client
         let (i, collation) = nom::bytes::complete::take(1u8)(i)?;
         let (i, _) = nom::bytes::complete::take(23u8)(i)?;
 
-        let (i, username) = if after_tls || !capabilities.contains(CapabilityFlags::CLIENT_SSL) {
+        let (i, username, auth_response, auth_plugin) = if after_tls
+            || !capabilities.contains(CapabilityFlags::CLIENT_SSL)
+        {
             let (i, user) = nom::bytes::complete::take_until(&b"\0"[..])(i)?;
             let (i, _) = nom::bytes::complete::tag(b"\0")(i)?;
-            (i, Some(user))
+
+            let (i, auth_response) =
+                if capabilities.contains(CapabilityFlags::CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA) {
+                    let mut i = i;
+                    let size = i.read_lenenc_int().unwrap_or(0);
+
+                    nom::bytes::complete::take(size)(i)?
+                } else if capabilities.contains(CapabilityFlags::CLIENT_SECURE_CONNECTION) {
+                    let (i, size) = nom::number::complete::le_u8(i)?;
+                    nom::bytes::complete::take(size)(i)?
+                } else {
+                    nom::bytes::complete::take_until(&b"\0"[..])(i)?
+                };
+
+            let (i, auth_plugin) =
+                if capabilities.contains(CapabilityFlags::CLIENT_PLUGIN_AUTH) && !i.is_empty() {
+                    let (i, auth_plugin) = nom::bytes::complete::take_until(&b"\0"[..])(i)?;
+
+                    let (i, _) = nom::bytes::complete::tag(b"\0")(i)?;
+                    (i, Some(auth_plugin))
+                } else {
+                    (i, None)
+                };
+
+            (i, Some(user), Some(auth_response), auth_plugin)
         } else {
-            (i, None)
+            (i, None, None, None)
         };
 
         Ok((
@@ -42,6 +71,8 @@ pub fn client_handshake(i: &[u8], after_tls: bool) -> nom::IResult<&[u8], Client
                 maxps,
                 collation: u16::from(collation[0]),
                 username,
+                auth_response,
+                auth_plugin,
             },
         ))
     } else {
@@ -58,6 +89,9 @@ pub fn client_handshake(i: &[u8], after_tls: bool) -> nom::IResult<&[u8], Client
                 maxps,
                 collation: 0,
                 username: Some(username),
+                // Not implementing auth plugins for old handshake
+                auth_response: None,
+                auth_plugin: None,
             },
         ))
     }
