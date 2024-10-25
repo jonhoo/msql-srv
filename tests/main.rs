@@ -244,7 +244,10 @@ where
         C: FnOnce(&mut mysql::Conn) -> (),
     {
         let client_tls = self.client_tls.clone();
+        #[cfg(feature = "tls")]
         let pwd = self.password;
+        #[cfg(not(feature = "tls"))]
+        let pwd: Option<String> = None;
 
         let listener = net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
