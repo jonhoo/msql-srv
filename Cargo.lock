@@ -1256,7 +1256,7 @@ dependencies = [
  "tempfile",
  "time",
  "tokio",
- "twox-hash",
+ "twox-hash 2.1.0",
 ]
 
 [[package]]
@@ -1281,7 +1281,7 @@ dependencies = [
  "serde",
  "serde_json",
  "socket2",
- "twox-hash",
+ "twox-hash 1.6.3",
  "url",
 ]
 
@@ -1333,7 +1333,7 @@ dependencies = [
  "tokio",
  "tokio-native-tls",
  "tokio-util",
- "twox-hash",
+ "twox-hash 1.6.3",
  "url",
 ]
 
@@ -2572,6 +2572,15 @@ dependencies = [
  "cfg-if",
  "rand 0.8.5",
  "static_assertions",
+]
+
+[[package]]
+name = "twox-hash"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7b17f197b3050ba473acf9181f7b1d3b66d1cf7356c6cc57886662276e65908"
+dependencies = [
+ "rand 0.8.5",
 ]
 
 [[package]]
