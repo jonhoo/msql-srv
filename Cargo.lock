@@ -873,15 +873,6 @@ dependencies = [
 
 [[package]]
 name = "hashbrown"
-version = "0.13.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43a3c133739dddd0d2990f9a4bdf8eb4b21ef50e4851ca85ab661199821d510e"
-dependencies = [
- "ahash 0.8.11",
-]
-
-[[package]]
-name = "hashbrown"
 version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
@@ -1168,15 +1159,6 @@ checksum = "90ed8c1e510134f979dbc4f070f87d4313098b704861a105fe34231c70a3901c"
 
 [[package]]
 name = "lru"
-version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "718e8fae447df0c7e1ba7f5189829e63fd536945c8988d61444c19039f16b670"
-dependencies = [
- "hashbrown 0.13.2",
-]
-
-[[package]]
-name = "lru"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3262e75e648fce39813cb56ac41f3c3e3f65217ebf3844d818d1f9398cfb0dc"
@@ -1261,9 +1243,9 @@ dependencies = [
 
 [[package]]
 name = "mysql"
-version = "24.0.0"
+version = "25.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cfe2babc5f5b354eab9c0a0e40da3e69c4d77421c8b9b6ee03f97acc75bd7955"
+checksum = "c6ad644efb545e459029b1ffa7c969d830975bd76906820913247620df10050b"
 dependencies = [
  "bufstream",
  "bytes",
@@ -1271,12 +1253,11 @@ dependencies = [
  "flate2",
  "io-enum",
  "libc",
- "lru 0.10.1",
- "mysql_common 0.30.6",
+ "lru",
+ "mysql_common 0.32.3",
  "named_pipe",
  "native-tls",
- "once_cell",
- "pem 2.0.1",
+ "pem 3.0.4",
  "percent-encoding",
  "serde",
  "serde_json",
@@ -1304,6 +1285,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "mysql-common-derive"
+version = "0.31.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "afe0450cc9344afff34915f8328600ab5ae19260802a334d0f72d2d5bdda3bfe"
+dependencies = [
+ "darling",
+ "heck",
+ "num-bigint",
+ "proc-macro-crate 3.1.0",
+ "proc-macro-error",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.66",
+ "termcolor",
+ "thiserror",
+]
+
+[[package]]
 name = "mysql_async"
 version = "0.33.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1317,7 +1316,7 @@ dependencies = [
  "futures-util",
  "keyed_priority_queue",
  "lazy_static",
- "lru 0.12.3",
+ "lru",
  "mio",
  "mysql_common 0.31.0",
  "native-tls",
@@ -1357,7 +1356,7 @@ dependencies = [
  "frunk",
  "lazy_static",
  "lexical",
- "mysql-common-derive",
+ "mysql-common-derive 0.30.2",
  "num-bigint",
  "num-traits",
  "rand 0.8.5",
@@ -1396,7 +1395,7 @@ dependencies = [
  "flate2",
  "frunk",
  "lazy_static",
- "mysql-common-derive",
+ "mysql-common-derive 0.30.2",
  "num-bigint",
  "num-traits",
  "rand 0.8.5",
@@ -1412,7 +1411,46 @@ dependencies = [
  "thiserror",
  "time",
  "uuid",
- "zstd",
+ "zstd 0.12.4",
+]
+
+[[package]]
+name = "mysql_common"
+version = "0.32.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1e52cf194ab414202ead9dfda216d2a9ec59cc97ac024ba499ca686d82f040d"
+dependencies = [
+ "base64 0.21.7",
+ "bigdecimal 0.4.3",
+ "bindgen 0.69.4",
+ "bitflags 2.5.0",
+ "bitvec",
+ "btoi",
+ "byteorder",
+ "bytes",
+ "cc",
+ "cmake",
+ "crc32fast",
+ "flate2",
+ "frunk",
+ "lazy_static",
+ "mysql-common-derive 0.31.1",
+ "num-bigint",
+ "num-traits",
+ "rand 0.8.5",
+ "regex",
+ "rust_decimal",
+ "saturating",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sha2",
+ "smallvec",
+ "subprocess",
+ "thiserror",
+ "time",
+ "uuid",
+ "zstd 0.13.1",
 ]
 
 [[package]]
@@ -1601,16 +1639,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a8835c273a76a90455d7344889b0964598e3316e2a79ede8e36f16bdcf2228b8"
 dependencies = [
  "base64 0.13.1",
-]
-
-[[package]]
-name = "pem"
-version = "2.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b13fe415cdf3c8e44518e18a7c95a13431d9bdf6d15367d82b23c377fdd441a"
-dependencies = [
- "base64 0.21.7",
- "serde",
 ]
 
 [[package]]
@@ -2997,7 +3025,16 @@ version = "0.12.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1a27595e173641171fc74a1232b7b1c7a7cb6e18222c11e9dfb9888fa424c53c"
 dependencies = [
- "zstd-safe",
+ "zstd-safe 6.0.6",
+]
+
+[[package]]
+name = "zstd"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d789b1514203a1120ad2429eae43a7bd32b90976a7bb8a05f7ec02fa88cc23a"
+dependencies = [
+ "zstd-safe 7.1.0",
 ]
 
 [[package]]
@@ -3007,6 +3044,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee98ffd0b48ee95e6c5168188e44a54550b1564d9d530ee21d5f0eaed1069581"
 dependencies = [
  "libc",
+ "zstd-sys",
+]
+
+[[package]]
+name = "zstd-safe"
+version = "7.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1cd99b45c6bc03a018c8b8a86025678c87e55526064e38f9df301989dce7ec0a"
+dependencies = [
  "zstd-sys",
 ]
 
