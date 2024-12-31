@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/msql_srv.svg)](https://crates.io/crates/msql_srv)
 [![Documentation](https://docs.rs/msql-srv/badge.svg)](https://docs.rs/msql-srv/)
-[![Codecov](https://codecov.io/github/jonhoo/msql-srv/coverage.svg?branch=master)](https://codecov.io/gh/jonhoo/msql-srv)
+[![codecov](https://codecov.io/gh/jonhoo/msql-srv/graph/badge.svg?token=RJe5uPCdWI)](https://codecov.io/gh/jonhoo/msql-srv)
 [![Dependency status](https://deps.rs/repo/github/jonhoo/msql-srv/status.svg)](https://deps.rs/repo/github/jonhoo/msql-srv)
 ![Maintenance](https://img.shields.io/badge/maintenance-experimental-blue.svg)
 
