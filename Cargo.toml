@@ -23,7 +23,7 @@ default = ["tls"]
 tls = ["rustls"]
 
 [dependencies]
-nom = "7"
+nom = "8"
 mysql_common = { version = "0.31.0", features = ["chrono"] }
 byteorder = "1"
 chrono = "0.4.23"
