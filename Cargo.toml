@@ -47,7 +47,7 @@ openssl = "0.10.66"
 [target.'cfg(any())'.dev-dependencies]
 flate2 = "1.0.13" # libz-sys 1.0.0 has problems
 tap = "1.0.1" # bitvec's wyz dependency needs this
-time = "0.3.1" # mysql_common needs this through chrono
+time = "0.3.47" # mysql_common needs this through chrono
 byteorder = "1.2.4" # mysql_common needs this
 rand = "0.3.14" # otherwise libc + winapi won't build
 async-trait = "0.1.9" # via tokio-postgtes via postgres
